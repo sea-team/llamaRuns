@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llamaRunModel</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="brand">llamaRunModel</div>
+  <div id="stats" class="stats"></div>
+</header>
+
+<nav class="tabs">
+  <button data-tab="models" class="active">模型</button>
+  <button data-tab="instances">运行实例 <span id="runCount" class="badge"></span></button>
+  <button data-tab="settings">全局设置</button>
+</nav>
+
+<main>
+  <!-- 模型列表 -->
+  <section id="tab-models" class="tab active">
+    <div class="toolbar">
+      <input id="modelFilter" placeholder="筛选模型…">
+      <button id="btnRefreshModels">刷新列表</button>
+      <span id="modelHint" class="muted"></span>
+    </div>
+    <div id="modelList" class="list"></div>
+  </section>
+
+  <!-- 运行实例 -->
+  <section id="tab-instances" class="tab">
+    <div id="instList" class="inst-list"></div>
+    <div class="log-panel">
+      <div class="toolbar">
+        <strong id="logTitle">日志</strong>
+        <label><input type="checkbox" id="autoScroll" checked> 自动滚动</label>
+        <label><input type="checkbox" id="wrapLog"> 自动换行</label>
+        <button id="btnClearLog">清屏</button>
+        <span id="logInfo" class="muted"></span>
+      </div>
+      <div id="logView" class="log"></div>
+    </div>
+  </section>
+
+  <!-- 全局设置 -->
+  <section id="tab-settings" class="tab">
+    <form id="settingsForm" class="settings">
+      <fieldset>
+        <legend>程序</legend>
+        <label>llama-server 路径
+          <input name="llamaServerPath" placeholder="留空则使用系统 PATH 中的 llama-server">
+        </label>
+        <div id="serverInfo" class="muted small"></div>
+        <button type="button" id="btnProbe">检测</button>
+      </fieldset>
+      <fieldset>
+        <legend>模型目录（每行一个）</legend>
+        <textarea name="modelDirs" rows="4" placeholder="例如：D:\models 或 /data/models"></textarea>
+      </fieldset>
+      <fieldset>
+        <legend>运行</legend>
+        <label class="inline"><input type="checkbox" name="allowMulti"> 允许同时运行多个模型（默认单开，启动新模型会停止旧模型）</label>
+        <div class="grid">
+          <label>日志保留行数<input name="maxLogLines" type="number" min="100"></label>
+          <label>自动分配端口起始值<input name="basePort" type="number" min="1"></label>
+          <label>HuggingFace 地址<input name="hfEndpoint" placeholder="https://huggingface.co 或 https://hf-mirror.com"></label>
+        </div>
+      </fieldset>
+      <fieldset>
+        <legend>全局启动参数 <span class="muted small">（模型未单独配置的参数使用此处的值；留空使用内置默认值）</span></legend>
+        <div id="globalParams" class="grid"></div>
+      </fieldset>
+      <div class="actions"><button type="submit" class="primary">保存设置</button></div>
+    </form>
+  </section>
+</main>
+
+<!-- 通用对话框 -->
+<dialog id="dlg">
+  <form method="dialog" class="dlg-inner">
+    <div class="dlg-head"><strong id="dlgTitle"></strong><button value="cancel" class="close" aria-label="关闭">×</button></div>
+    <div id="dlgBody" class="dlg-body"></div>
+    <div id="dlgFoot" class="dlg-foot"></div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast"></div>
+<script src="app.js"></script>
+</body>
+</html>
