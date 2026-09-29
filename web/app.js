@@ -56,56 +56,105 @@ const ALIVE = ['loading', 'running', 'stopping'];
 const CACHE_TYPES = ['f16', 'bf16', 'q8_0', 'q5_1', 'q5_0', 'q4_1', 'q4_0', 'iq4_nl', 'f32'];
 const ONOFF = [['on', 'on'], ['off', 'off']];
 const FIELDS = [
-  { sec: 'GPU 与显存', note: '仅 GPU 运行方式生效' },
-  { k: 'mode', label: '运行方式', type: 'select', opts: [['gpu', 'GPU'], ['cpu', 'CPU']], gpu: true },
-  { k: 'nGpuLayers', label: 'GPU 层数 -ngl', type: 'text', hint: '显存充裕（如 24GB+ 跑 7B/8B）填 999：全层卸载最快、行为确定可复现；显存紧张或多模型混跑用 auto 并开启 -fit，自动适配显存' },
-  { k: 'fit', label: '自动适配显存 -fit', type: 'select', opts: ONOFF, hint: '根据显存自动调整未设置的参数（新版默认 on）' },
-  { k: 'fitTarget', label: '每设备预留显存 -fitt (MiB)', type: 'text', hint: '默认 1024；多卡可用逗号分隔，如 1024,2048' },
-  { k: 'fitCtx', label: '-fit 最小上下文 -fitc', type: 'int', hint: '默认 4096' },
-  { k: 'device', label: 'GPU 设备 --device', type: 'text', hint: '留空自动，如 CUDA0 / Vulkan0，多个用逗号分隔' },
-  { k: 'splitMode', label: '多卡切分 -sm', type: 'select', opts: [['layer', 'layer（按层）'], ['row', 'row（按行）'], ['tensor', 'tensor'], ['none', 'none（单卡）']] },
-  { k: 'tensorSplit', label: '多卡比例 -ts', type: 'text', hint: '如 3,1' },
-  { k: 'mainGpu', label: '主 GPU -mg', type: 'int' },
-  { k: 'cpuMoe', label: 'MoE 专家全放 CPU -cmoe', type: 'bool' },
-  { k: 'nCpuMoe', label: '前 N 层 MoE 放 CPU -ncmoe', type: 'int', hint: '显存不足跑 MoE 模型时使用' },
-  { k: 'kvOffload', label: 'KV 缓存放 GPU', type: 'bool', hint: '关闭时传 -nkvo，节省显存但变慢' },
-  { sec: '上下文与性能' },
-  { k: 'ctxSize', label: '上下文长度 -c', type: 'int', hint: '0 表示使用模型训练值（可能很占内存）' },
-  { k: 'threads', label: 'CPU 线程数 -t', type: 'int', hint: '留空自动' },
-  { k: 'threadsBatch', label: '批处理线程数 -tb', type: 'int', hint: '默认同 -t' },
-  { k: 'parallel', label: '并发槽数 -np', type: 'int', hint: '默认自动' },
-  { k: 'batchSize', label: '批大小 -b', type: 'int' },
-  { k: 'ubatchSize', label: '物理批大小 -ub', type: 'int' },
-  { k: 'flashAttn', label: 'Flash Attention -fa', type: 'select', opts: [['auto', 'auto'], ['on', 'on'], ['off', 'off'], ['none', '不传递（旧版）']] },
-  { k: 'cacheTypeK', label: 'K 缓存类型 -ctk', type: 'select', opts: CACHE_TYPES.map(v => [v, v]) },
-  { k: 'cacheTypeV', label: 'V 缓存类型 -ctv', type: 'select', opts: CACHE_TYPES.map(v => [v, v]), hint: 'q8_0 可省一半 KV 显存' },
-  { k: 'cacheRam', label: '提示缓存上限 -cram (MiB)', type: 'int', hint: '默认 8192，-1 不限，0 关闭' },
-  { k: 'mlock', label: '锁定内存 --mlock', type: 'bool' },
-  { k: 'noMmap', label: '禁用 mmap --no-mmap', type: 'bool' },
-  { k: 'contextShift', label: '上下文平移 --context-shift', type: 'bool', hint: '超长生成时丢弃早期内容' },
-  { sec: '采样' },
-  { k: 'temp', label: '温度 --temp', type: 'float', hint: '默认 0.8' },
-  { k: 'topK', label: 'Top-K --top-k', type: 'int', hint: '默认 40' },
-  { k: 'topP', label: 'Top-P --top-p', type: 'float', hint: '默认 0.95' },
-  { k: 'minP', label: 'Min-P --min-p', type: 'float', hint: '默认 0.05' },
-  { k: 'repeatPenalty', label: '重复惩罚 --repeat-penalty', type: 'float', hint: '默认 1.0（关闭）' },
-  { k: 'presencePenalty', label: '存在惩罚 --presence-penalty', type: 'float', hint: '默认 0' },
-  { k: 'seed', label: '随机种子 -s', type: 'int', hint: '-1 随机' },
-  { k: 'nPredict', label: '最大生成长度 -n', type: 'int', hint: '-1 不限' },
-  { sec: '模板与推理' },
-  { k: 'jinja', label: 'Jinja 模板 --jinja', type: 'bool', hint: '新版默认开启' },
-  { k: 'reasoning', label: '思考模式 -rea', type: 'select', opts: [['auto', 'auto'], ['on', 'on'], ['off', 'off']] },
-  { k: 'reasoningBudget', label: '思考预算 --reasoning-budget', type: 'int', hint: '-1 不限，0 立即结束思考' },
-  { k: 'chatTemplateKwargs', label: '模板参数 --chat-template-kwargs', type: 'text', hint: `JSON，如 {"enable_thinking":false}` },
-  { sec: '服务', note: '仅 llama-server 生效' },
-  { k: 'host', label: '监听地址 --host', type: 'text', hint: '0.0.0.0 允许局域网访问' },
-  { k: 'port', label: '端口 --port', type: 'int', hint: '0 表示自动分配' },
-  { k: 'apiKey', label: 'API Key --api-key', type: 'text' },
-  { k: 'alias', label: '模型别名 -a', type: 'text', modelOnly: true, hint: '留空使用文件名' },
-  { k: 'webui', label: '内置 Web UI', type: 'bool', hint: '关闭时传 --no-webui' },
-  { k: 'metrics', label: '监控指标 --metrics', type: 'bool' },
+  { sec: 'GPU 与显存', note: '仅 GPU 运行方式生效；显存不够或启动报 out of memory 时，优先调整这一组' },
+  { k: 'mode', label: '运行方式', type: 'select', opts: [['gpu', 'GPU'], ['cpu', 'CPU']], gpu: true,
+    hint: 'GPU：用显卡加速（使用 GPU 版 llama-server），速度快；CPU：只用处理器和内存，不占显存但慢很多。未检测到可用 GPU 时自动使用 CPU。启动时也可临时切换。' },
+  { k: 'nGpuLayers', label: 'GPU 层数 -ngl', type: 'text',
+    hint: '放进显存的模型层数，越多越快、越占显存，放不下的层由 CPU 计算。auto：配合 -fit 按显存自动计算，显存紧张或多模型混跑时推荐；999 / all：全部放入显存，最快且行为确定可复现，显存充裕（如 24GB 跑 7B/8B）时推荐；也可填具体数字。' },
+  { k: 'fit', label: '自动适配显存 -fit', type: 'select', opts: ONOFF,
+    hint: '开启后按显卡剩余显存自动调整未手动设置的参数（如 GPU 层数、上下文长度），尽量避免显存溢出。新版默认 on；想完全手动控制时设为 off。' },
+  { k: 'fitTarget', label: '每卡预留显存 -fitt (MiB)', type: 'text',
+    hint: '-fit 计算时给每块显卡留出的空闲显存，默认 1024。同时还要跑游戏、其它模型或桌面特效时调大；多卡可分别设置，如 1024,2048。' },
+  { k: 'fitCtx', label: '-fit 最小上下文 -fitc', type: 'int',
+    hint: '-fit 自动缩小上下文时不会低于这个值（默认 4096）；若仍放不下，会改为减少 GPU 层数。' },
+  { k: 'device', label: '计算设备 --device', type: 'text',
+    hint: '指定用哪些设备计算，名称见设置页“检测”结果，如 CUDA0、Vulkan0，多个用逗号分隔。留空则自动使用全部可用设备。' },
+  { k: 'splitMode', label: '多卡切分方式 -sm', type: 'select', opts: [['layer', 'layer（按层）'], ['row', 'row（按行）'], ['tensor', 'tensor'], ['none', 'none（只用主卡）']],
+    hint: '多块显卡时如何分配模型：layer 按层分到各卡（默认，兼容性最好）；row 把权重按行切分，部分场景更快但依赖卡间带宽；none 只用主 GPU。单卡无需设置。' },
+  { k: 'tensorSplit', label: '多卡分配比例 -ts', type: 'text',
+    hint: '多卡时每张卡承担的比例，如 3,1 表示第一张卡放 3/4、第二张放 1/4。通常按各卡显存大小的比例填写。' },
+  { k: 'mainGpu', label: '主 GPU 序号 -mg', type: 'int',
+    hint: '切分方式为 none 时使用的显卡，或 row 模式下存放中间结果与 KV 缓存的显卡，从 0 开始，默认 0。' },
+  { k: 'cpuMoe', label: 'MoE 专家全部放 CPU -cmoe', type: 'bool',
+    hint: '仅对 MoE（混合专家）模型有效，如 Qwen3-30B-A3B、gpt-oss：把所有专家权重放在内存由 CPU 计算，注意力等其余部分仍在 GPU。适合显存小、内存大的机器跑大 MoE 模型。' },
+  { k: 'nCpuMoe', label: '前 N 层 MoE 放 CPU -ncmoe', type: 'int',
+    hint: '只把前 N 层的专家权重放到 CPU，比 -cmoe 更精细：从小往大逐步增加 N，直到显存刚好放得下，速度优于全部放 CPU。' },
+  { k: 'kvOffload', label: 'KV 缓存放显存', type: 'bool',
+    hint: 'KV 缓存是模型对上下文的“记忆”，上下文越长越大。默认放显存；关闭（传 -nkvo）改放内存，可省下不少显存，但生成速度明显下降。' },
+
+  { sec: '上下文与性能', note: '影响能处理多长的对话、内存/显存占用和处理速度' },
+  { k: 'ctxSize', label: '上下文长度 -c', type: 'int',
+    hint: '模型一次能“记住”的最大 token 数（提示词 + 历史对话 + 回复）。越大越占内存/显存。0 表示用模型训练时的最大值（可能 128K 以上，容易爆内存）；日常对话 4096~16384，长文档/代码 32768 左右。' },
+  { k: 'threads', label: 'CPU 线程数 -t', type: 'int',
+    hint: '生成回复时使用的 CPU 线程数，留空自动。纯 CPU 运行时设为物理核心数通常最快，超过物理核心数反而可能变慢。' },
+  { k: 'threadsBatch', label: '提示处理线程数 -tb', type: 'int',
+    hint: '处理输入提示词（预填充）时的线程数，默认与 -t 相同。可设为逻辑核心数以加快长提示词的处理。' },
+  { k: 'parallel', label: '并发槽数 -np', type: 'int',
+    hint: '服务端能同时处理的请求数。多个请求会分摊上下文，如 -c 8192 -np 4 时每个请求约 2048。多人或多个客户端同时使用时调大；默认自动。' },
+  { k: 'batchSize', label: '逻辑批大小 -b', type: 'int',
+    hint: '一次最多提交处理的提示词 token 数，默认 2048。调大可加快长提示词处理，但占用更多显存/内存。' },
+  { k: 'ubatchSize', label: '物理批大小 -ub', type: 'int',
+    hint: '实际每次送入计算的 token 数，默认 512，不能大于 -b。显存不足时可减小到 256 或 128；显存充裕时调大可加快提示处理。' },
+  { k: 'flashAttn', label: 'Flash Attention -fa', type: 'select', opts: [['auto', 'auto'], ['on', 'on'], ['off', 'off'], ['none', '不传递（旧版）']],
+    hint: '一种更高效的注意力计算方式：降低显存占用、加快长上下文处理，也是量化 V 缓存的前提。auto 自动判断（推荐）。旧版 llama.cpp 不认识 on/off/auto 时选“不传递”。' },
+  { k: 'cacheTypeK', label: 'K 缓存精度 -ctk', type: 'select', opts: CACHE_TYPES.map(v => [v, v]),
+    hint: 'KV 缓存中 K 部分的数据类型。默认 f16；q8_0 约省一半 KV 占用且几乎无损；q4_0 更省但回答质量会下降。' },
+  { k: 'cacheTypeV', label: 'V 缓存精度 -ctv', type: 'select', opts: CACHE_TYPES.map(v => [v, v]),
+    hint: 'KV 缓存中 V 部分的数据类型，量化（如 q8_0）需要开启 Flash Attention。长上下文时与 K 一起设为 q8_0 可显著节省显存。' },
+  { k: 'cacheRam', label: '提示缓存上限 -cram (MiB)', type: 'int',
+    hint: '在内存中缓存处理过的提示词，多轮对话或重复前缀时可跳过重复计算、加快响应。默认 8192，-1 不限制，0 关闭。' },
+  { k: 'mlock', label: '锁定内存 --mlock', type: 'bool',
+    hint: '把模型锁在物理内存中，防止被系统换到硬盘导致忽快忽慢。需要内存足够大；Linux 下可能需要额外权限。' },
+  { k: 'noMmap', label: '禁用内存映射 --no-mmap', type: 'bool',
+    hint: '默认模型按需从文件映射到内存，加载快且可与系统共享缓存。开启后改为一次性完整读入内存：加载更慢、占用更多，但在网络盘等环境下更稳定。一般保持关闭。' },
+  { k: 'contextShift', label: '上下文平移 --context-shift', type: 'bool',
+    hint: '上下文写满时自动丢弃最早的一部分内容继续生成，而不是报错停止。开启后模型会“忘记”对话开头的内容。' },
+
+  { sec: '采样', note: '控制回复的随机性与风格；建议优先使用“模型介绍”中提取的推荐值' },
+  { k: 'temp', label: '温度 --temp', type: 'float',
+    hint: '越高回复越随机、越有创意，越低越稳定、越确定。代码/数学建议 0.2~0.6，聊天/写作 0.7~1.0。默认 0.8。' },
+  { k: 'topK', label: 'Top-K --top-k', type: 'int',
+    hint: '每一步只从概率最高的 K 个候选词中挑选，越小越保守。0 表示不限制，默认 40。' },
+  { k: 'topP', label: 'Top-P --top-p', type: 'float',
+    hint: '只在累计概率达到 P 的候选词里挑选（核采样），越小越保守。1.0 表示关闭，默认 0.95。' },
+  { k: 'minP', label: 'Min-P --min-p', type: 'float',
+    hint: '丢弃概率低于“最高概率 × P”的候选词，比 Top-P 更能适应不同情形。0 表示关闭，默认 0.05。' },
+  { k: 'repeatPenalty', label: '重复惩罚 --repeat-penalty', type: 'float',
+    hint: '降低最近出现过的词再次出现的概率，大于 1 才生效（常用 1.05~1.15）。过大会让表达变得别扭。默认 1.0（关闭）。' },
+  { k: 'presencePenalty', label: '存在惩罚 --presence-penalty', type: 'float',
+    hint: '对出现过的词统一施加惩罚，鼓励谈论新内容，可缓解思考类模型陷入循环重复（Qwen3 推荐 0~1.5）。默认 0（关闭）。' },
+  { k: 'seed', label: '随机种子 -s', type: 'int',
+    hint: '固定种子后，相同输入和参数会得到相同输出，便于对比调参；-1 表示每次随机。' },
+  { k: 'nPredict', label: '最大回复长度 -n', type: 'int',
+    hint: '单次回复最多生成的 token 数，-1 表示不限制（直到模型自行结束或上下文用满）。客户端请求中的 max_tokens 会覆盖此值。' },
+
+  { sec: '模板与推理', note: '聊天格式、工具调用和思考模式' },
+  { k: 'jinja', label: 'Jinja 聊天模板 --jinja', type: 'bool',
+    hint: '使用模型文件内置的 Jinja 聊天模板，工具调用（function calling）和思考模式都依赖它。新版默认开启，一般保持开启。' },
+  { k: 'reasoning', label: '思考模式 -rea', type: 'select', opts: [['auto', 'auto'], ['on', 'on'], ['off', 'off']],
+    hint: '针对会“先思考再回答”的模型（如 Qwen3、DeepSeek-R1）：auto 按模板自动识别；on 强制开启；off 关闭思考，回复更快但复杂问题效果可能变差。' },
+  { k: 'reasoningBudget', label: '思考预算 --reasoning-budget', type: 'int',
+    hint: '思考阶段最多使用的 token 数：-1 不限制；0 跳过思考直接回答；正数表示达到后强制结束思考并给出答案。' },
+  { k: 'chatTemplateKwargs', label: '模板参数 --chat-template-kwargs', type: 'text',
+    hint: '传给聊天模板的额外参数（JSON 格式），例如 {"enable_thinking":false} 可关闭 Qwen3 的思考。' },
+
+  { sec: '服务', note: '仅 llama-server 生效，llama-cli 会忽略' },
+  { k: 'host', label: '监听地址 --host', type: 'text',
+    hint: '127.0.0.1 仅本机可访问；0.0.0.0 允许局域网内其它设备访问（建议同时设置 API Key）。' },
+  { k: 'port', label: '端口 --port', type: 'int',
+    hint: '服务端口。0 表示从设置中的“自动分配端口起始值”开始寻找空闲端口；同时运行多个模型时建议保持自动。' },
+  { k: 'apiKey', label: 'API Key --api-key', type: 'text',
+    hint: '设置后，客户端需在请求头携带 Authorization: Bearer <密钥> 才能调用。服务对局域网或外网开放时务必设置。' },
+  { k: 'alias', label: '模型别名 -a', type: 'text', modelOnly: true,
+    hint: '接口 /v1/models 返回的模型名称，客户端按这个名字调用。留空使用文件名。' },
+  { k: 'webui', label: '内置网页聊天 Web UI', type: 'bool',
+    hint: 'llama-server 自带的网页聊天界面，浏览器打开 http://地址:端口 即可使用。只作 API 服务时可关闭（传 --no-webui）。' },
+  { k: 'metrics', label: '监控指标 --metrics', type: 'bool',
+    hint: '开启 /metrics 接口，输出 Prometheus 格式的吞吐、排队等指标，用于接入监控系统。' },
+
   { sec: '其它' },
-  { k: 'extraArgs', label: '附加参数（原样追加到命令行）', type: 'textarea', wide: true, hint: '其它参数见 llama-server --help，例如：--rope-scaling yarn --swa-full' },
+  { k: 'extraArgs', label: '附加参数（原样追加到命令行）', type: 'textarea', wide: true,
+    hint: '上面没有列出的参数写在这里，会原样追加到命令末尾，例如 --rope-scaling yarn、--swa-full、--lora 路径。完整列表可运行 llama-server --help 查看。' },
 ];
 const FIELD_LABEL = Object.fromEntries(FIELDS.filter(f => f.k).map(f => [f.k, f.label]));
 
@@ -305,18 +354,32 @@ function switchTab(name) {
 }
 
 // ---------- 系统状态 ----------
-const HIST_LEN = 90; // 保留约 3 分钟历史
-const hist = {};
-function pushHist(key, v) {
-  (hist[key] ||= []).push(v);
-  if (hist[key].length > HIST_LEN) hist[key].shift();
+// 曲线数据来自服务端采样历史（约 3 分钟），打开页面即可看到完整曲线。
+let hist = [];
+function histSeries(key) {
+  const [k, i] = key.split(':');
+  return hist.map(h => ({ t: h.t, v: i === undefined ? h[k] : (h[k] || [])[+i] ?? 0 }));
+}
+function agoText(ms) {
+  const sec = Math.round(ms / 1000);
+  return sec < 60 ? `${sec} 秒前` : `${Math.round(sec / 60)} 分钟前`;
 }
 function sparkSVG(key) {
-  const d = hist[key] || [];
-  if (d.length < 2) return '<svg class="spark"></svg>';
-  const w = 300, h = 36, step = w / (HIST_LEN - 1), x0 = w - (d.length - 1) * step;
-  const pts = d.map((v, i) => `${(x0 + i * step).toFixed(1)},${(h - Math.max(0, Math.min(100, v)) / 100 * (h - 2) - 1).toFixed(1)}`);
-  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><path class="area" d="M${pts[0].split(',')[0]},${h}L${pts.join('L')}L${w},${h}Z"/><path d="M${pts.join('L')}"/></svg>`;
+  const d = histSeries(key);
+  const W = 300, H = 48;
+  const grid = [0.25, 0.5, 0.75].map(y => `<line x1="0" x2="${W}" y1="${H * y}" y2="${H * y}"/>`).join('');
+  if (d.length < 2) {
+    return `<div class="spark-wrap"><svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><rect class="bg" width="${W}" height="${H}"/><g class="grid">${grid}</g></svg>
+      <div class="spark-cap"><span>采集中…</span><span>现在</span></div></div>`;
+  }
+  const t0 = d[0].t, t1 = d[d.length - 1].t, span = Math.max(t1 - t0, 1);
+  const pts = d.map(p => [((p.t - t0) / span * W).toFixed(1), (H - Math.max(0, Math.min(100, p.v)) / 100 * (H - 2) - 1).toFixed(1)]);
+  const line = 'M' + pts.map(p => p.join(',')).join('L');
+  const peak = Math.max(...d.map(p => p.v)), avg = d.reduce((a, p) => a + p.v, 0) / d.length;
+  return `<div class="spark-wrap"><svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+      <rect class="bg" width="${W}" height="${H}"/><g class="grid">${grid}</g>
+      <path class="area" d="${line}L${W},${H}L0,${H}Z"/><path class="line" d="${line}" vector-effect="non-scaling-stroke"/></svg>
+    <div class="spark-cap"><span>${agoText(t1 - t0)}</span><span>峰值 ${peak.toFixed(0)}% · 平均 ${avg.toFixed(0)}%</span><span>现在</span></div></div>`;
 }
 function levelCls(p) { return p >= 90 ? 'high' : p >= 75 ? 'mid' : ''; }
 function metricHTML(label, pct, text, key) {
@@ -340,18 +403,13 @@ async function refreshStats() {
   try { s = await api('/api/stats'); } catch (e) { return; }
   state.stats = s;
   const swapPct = s.swapTotal ? s.swapUsed / s.swapTotal * 100 : 0;
-  pushHist('cpu', s.cpuPercent);
-  pushHist('mem', s.memPercent);
-  (s.gpus || []).forEach((g, i) => {
-    pushHist('gpu' + i, g.util);
-    pushHist('vram' + i, g.memTotal ? g.memUsed / g.memTotal * 100 : 0);
-  });
   // 顶部精简状态：只显示最关键的占用率，便于在其它页面留意是否爆内存
   const vram = (s.gpus || []).filter(g => g.memTotal).map(g => g.memUsed / g.memTotal * 100);
   const pctB = p => `<b class="${p >= 90 ? 'hot' : ''}">${p.toFixed(0)}%</b>`;
   $('#miniStat').innerHTML = `CPU ${pctB(s.cpuPercent)} · 内存 ${pctB(s.memPercent)}` + (vram.length ? ` · 显存 ${vram.map(pctB).join('/')}` : '');
   updateInstanceMem();
   if (!$('#tab-system').classList.contains('active')) return;
+  try { hist = await api('/api/stats/history'); } catch (e) { }
 
   const h = state.host || {};
   let cards = `<div class="card"><h4>CPU <small title="${esc(h.cpuModel)}">${esc(h.cpuModel || '')}</small></h4>
@@ -370,8 +428,8 @@ async function refreshStats() {
     if (g.driver) kv.push(['驱动', esc(g.driver)]);
     if (g.cuda) kv.push(['CUDA', esc(g.cuda)]);
     cards += `<div class="card"><h4>GPU ${i} <small title="${esc(g.name)}">${esc(g.name)}</small></h4>
-      ${metricHTML('占用率', g.util, g.util.toFixed(0) + '%', 'gpu' + i)}
-      ${g.memTotal ? metricHTML('显存', mp, `${fmtBytes(g.memUsed)} / ${fmtBytes(g.memTotal)}（${mp.toFixed(0)}%）`, 'vram' + i) : ''}
+      ${metricHTML('占用率', g.util, g.util.toFixed(0) + '%', 'gpu:' + i)}
+      ${g.memTotal ? metricHTML('显存', mp, `${fmtBytes(g.memUsed)} / ${fmtBytes(g.memTotal)}（${mp.toFixed(0)}%）`, 'vram:' + i) : ''}
       <div class="kv">${kv.map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join('')}</div></div>`;
   });
   if (!(s.gpus || []).length) cards += `<div class="card"><h4>GPU</h4><div class="muted small">未检测到 NVIDIA / AMD 显卡监控工具（nvidia-smi / rocm-smi），不显示显卡信息。</div></div>`;
@@ -536,7 +594,7 @@ async function paramsDialog(g) {
   let d;
   try { d = await api(`/api/groups/${g.id}/params`); } catch (e) { return toast(e.message, true); }
   const body = openDialog('模型参数：' + g.name,
-    `<p class="muted small">参数对该组所有版本生效。留空的参数继承全局配置，优先级：模型参数 → 全局参数 → 内置默认。</p><div class="grid" id="mParams"></div>`, [
+    `<p class="muted small">参数对该组所有版本生效。留空的参数继承全局配置，优先级：模型参数 → 全局参数 → 内置默认。</p><div class="grid params-grid" id="mParams"></div>`, [
     {
       text: '清空独立参数', cls: 'danger', onClick: async () => {
         if (!confirm('确定清空该模型的独立参数？')) return false;

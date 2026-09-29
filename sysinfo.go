@@ -51,9 +51,21 @@ type SysStat struct {
 	Time       int64              `json:"time"`
 }
 
+// HistPoint 是一次采样的占用率（百分比），用于绘制曲线。
+type HistPoint struct {
+	T    int64     `json:"t"` // 毫秒时间戳
+	CPU  float64   `json:"cpu"`
+	Mem  float64   `json:"mem"`
+	GPU  []float64 `json:"gpu"`
+	VRAM []float64 `json:"vram"`
+}
+
+const histMax = 90 // 约 3 分钟（每 2 秒一次）
+
 type SysMonitor struct {
 	mu    sync.RWMutex
 	stat  SysStat
+	hist  []HistPoint
 	mgr   *Manager
 	procs map[int32]*process.Process
 }
@@ -69,6 +81,12 @@ func (s *SysMonitor) Get() SysStat {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.stat
+}
+
+func (s *SysMonitor) History() []HistPoint {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]HistPoint{}, s.hist...)
 }
 
 func (s *SysMonitor) loop() {
@@ -87,8 +105,21 @@ func (s *SysMonitor) loop() {
 		st.GPUs = gpuStats()
 		st.ProcMem, st.ProcCPU = s.procStats()
 		st.Time = time.Now().UnixMilli()
+		hp := HistPoint{T: st.Time, CPU: st.CPUPercent, Mem: st.MemPercent}
+		for _, g := range st.GPUs {
+			hp.GPU = append(hp.GPU, g.Util)
+			v := 0.0
+			if g.MemTotal > 0 {
+				v = float64(g.MemUsed) / float64(g.MemTotal) * 100
+			}
+			hp.VRAM = append(hp.VRAM, v)
+		}
 		s.mu.Lock()
 		s.stat = st
+		s.hist = append(s.hist, hp)
+		if len(s.hist) > histMax {
+			s.hist = s.hist[len(s.hist)-histMax:]
+		}
 		s.mu.Unlock()
 		time.Sleep(500 * time.Millisecond)
 	}

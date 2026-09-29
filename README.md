@@ -1,14 +1,16 @@
-# llamaRunModel
+# llamaRuns
 
 llama-server 的 Web 管理面板：扫描本地 GGUF 模型、配置参数、启动/切换模型、实时查看输出，并监控 CPU/GPU/内存。单文件运行，支持 Windows / Linux / macOS / Android(Termux)。
 
 ## 运行
 
 ```bash
-go build -o llamaRunModel .      # 或 ./build.sh 交叉编译全部平台
-./llamaRunModel                  # 默认 http://127.0.0.1:8686
-./llamaRunModel -addr 0.0.0.0:8686 -config /path/config.json
+go build -o llamaRuns .      # 或 ./build.sh 交叉编译全部平台到 dist/
+./llamaRuns                  # 默认 http://127.0.0.1:8686
+./llamaRuns -addr 0.0.0.0:8686 -config /path/config.json
 ```
+
+开发说明（架构、接口、约定、需求归档）见 [CLAUDE.md](CLAUDE.md)。
 
 - `-addr`：面板监听地址。面板可以启动进程，**不要在不可信网络中暴露**。
 - `-config`：配置文件路径，默认为程序所在目录下的 `config.json`；模型介绍缓存在其旁边的 `cache/info/`。

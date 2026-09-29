@@ -1,4 +1,4 @@
-module llamaRunModel
+module llamaRuns
 
 go 1.22.2
 

@@ -351,6 +351,9 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /api/stats", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, a.mon.Get())
 	})
+	mux.HandleFunc("GET /api/stats/history", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, a.mon.History())
+	})
 	mux.HandleFunc("GET /api/host", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, hostInfo())
 	})

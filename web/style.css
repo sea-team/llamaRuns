@@ -57,7 +57,8 @@ label { display: block; font-size: 13px; }
 label.inline { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
 .grid .wide { grid-column: 1 / -1; }
-.field-hint { font-size: 11px; color: var(--muted); }
+.field-hint { font-size: 12px; line-height: 1.5; color: var(--muted); margin-top: 3px; }
+.params-grid { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px 16px; }
 .actions { display: flex; justify-content: flex-end; gap: 8px; }
 dialog { border: none; border-radius: 10px; padding: 0; width: min(900px, calc(100vw - 32px)); max-height: calc(100vh - 32px); background: var(--panel); color: var(--text); }
 dialog::backdrop { background: rgba(0,0,0,.45); }
@@ -131,9 +132,13 @@ table.recs td, table.recs th { border-bottom: 1px solid var(--line); padding: 4p
 .metric .big { height: 10px; background: var(--line); border-radius: 5px; overflow: hidden; }
 .metric .big i { display: block; height: 100%; background: var(--ok); transition: width .5s; }
 .metric .big i.mid { background: var(--warn); } .metric .big i.high { background: var(--err); }
-.spark { width: 100%; height: 36px; display: block; margin-top: 4px; }
-.spark path { fill: none; stroke: var(--primary); stroke-width: 1.5; }
-.spark .area { fill: var(--primary); opacity: .12; stroke: none; }
+.spark-wrap { margin-top: 6px; }
+.spark { width: 100%; height: 48px; display: block; border-radius: 4px; overflow: hidden; }
+.spark .bg { fill: var(--bg); }
+.spark .grid line { stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; stroke-dasharray: 3 3; }
+.spark .line { fill: none; stroke: var(--primary); stroke-width: 1.5; stroke-linejoin: round; }
+.spark .area { fill: var(--primary); opacity: .15; stroke: none; }
+.spark-cap { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin-top: 2px; }
 .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-size: 12px; margin-top: 8px; }
 .kv span:nth-child(odd) { color: var(--muted); }
 .sec-title { font-size: 14px; margin: 18px 0 8px; }
