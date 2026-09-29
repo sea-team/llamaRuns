@@ -28,3 +28,18 @@ https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md 这里�
 在模型目录下的模型可能存在不同版本的，可以启动模型时选择不同的版本运行，默认启动上次运行的模型。
 访问 huggingface.co 时获取模型信息时可能网络不通，可增加代理设置用于访问。
 对于是 目录名/多个不同规格的模型时，应该在展示改为可折叠展开方式，而不是直接按模型全部列出来
+
+
+
+
+模型介绍信息应该查找guff版本的才对
+支持gpu时在启动模型可选择运行方式
+llama-cli方式也可直接运行，点击运行则自动打开终端，如果是windows优先使用 Windows Terminal Host 终端，这样交互效果更好些。
+美化下选择文件目录功能
+显卡信息 只需要提取主要部分即可，可以把顶部的状态信息和显卡信息集合成一个系统状态信息页面单独显示即可
+增加引导页，按系统、是否有独立显卡，是否都支持cpu、gpu方式运行，引导下载 https://github.com/ggml-org/llama.cpp/releases 相应版本
+
+另外 -gnl 的参考配置“
+显存充裕（比如 24GB 及以上跑 7B/8B）：直接 999，行为确定、可复现，方便你调参时对比。全层卸载推理速度最快、延迟最低，适合显存充足的场景。
+显存紧张或多模型混跑：用 -ngl auto -fit on，让系统自动适配显存，并可用 --fit-target 设定每设备目标剩余显存（默认 1024 MiB）。”
+参考 https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md 这里的完善运行参数配置

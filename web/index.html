@@ -9,16 +9,30 @@
 <body>
 <header>
   <div class="brand">llamaRunModel</div>
-  <div id="stats" class="stats"></div>
+  <nav class="tabs">
+    <button data-tab="guide">引导</button>
+    <button data-tab="models" class="active">模型</button>
+    <button data-tab="instances">运行实例 <span id="runCount" class="badge"></span></button>
+    <button data-tab="system">系统状态</button>
+    <button data-tab="settings">全局设置</button>
+  </nav>
+  <div id="miniStat" class="mini-stat" title="点击查看系统状态"></div>
 </header>
 
-<nav class="tabs">
-  <button data-tab="models" class="active">模型</button>
-  <button data-tab="instances">运行实例 <span id="runCount" class="badge"></span></button>
-  <button data-tab="settings">全局设置</button>
-</nav>
-
 <main>
+  <!-- 引导 -->
+  <section id="tab-guide" class="tab">
+    <div id="guideBody" class="guide">正在检测…</div>
+  </section>
+
+  <!-- 系统状态 -->
+  <section id="tab-system" class="tab">
+    <div id="sysHost" class="host-line muted small"></div>
+    <div id="sysCards" class="sys-cards"></div>
+    <h3 class="sec-title">运行实例资源占用</h3>
+    <div id="sysProcs"></div>
+  </section>
+
   <!-- 模型列表 -->
   <section id="tab-models" class="tab active">
     <div class="toolbar">
@@ -64,11 +78,6 @@
         <legend>模型目录</legend>
         <div id="dirList" class="dir-list"></div>
         <button type="button" id="btnAddDir">添加目录…</button>
-      </fieldset>
-      <fieldset id="gpuBox" hidden>
-        <legend>显卡信息 <span id="gpuTool" class="muted small"></span></legend>
-        <pre id="gpuOut" class="cmd gpu-out"></pre>
-        <button type="button" id="btnGpu">刷新</button>
       </fieldset>
       <fieldset>
         <legend>网络</legend>

@@ -11,36 +11,62 @@ import (
 // Params 是 llama-server 的启动参数。指针为 nil 表示“未设置”，
 // 模型参数未设置的项回退到全局参数，全局未设置的项回退到内置默认值。
 type Params struct {
-	Mode          *string  `json:"mode,omitempty"`            // cpu / gpu
-	Device        *string  `json:"device,omitempty"`          // --device，如 CUDA0、Vulkan0
-	NGpuLayers    *FlexStr `json:"nGpuLayers,omitempty"`      // -ngl：数字、auto 或 all
-	CtxSize       *int     `json:"ctxSize,omitempty"`         // -c
-	Threads       *int     `json:"threads,omitempty"`         // -t
-	BatchSize     *int     `json:"batchSize,omitempty"`       // -b
-	UBatchSize    *int     `json:"ubatchSize,omitempty"`      // -ub
-	Parallel      *int     `json:"parallel,omitempty"`        // -np
-	FlashAttn     *string  `json:"flashAttn,omitempty"`       // -fa on/off/auto
-	CacheTypeK    *string  `json:"cacheTypeK,omitempty"`      // -ctk
-	CacheTypeV    *string  `json:"cacheTypeV,omitempty"`      // -ctv
-	Mlock         *bool    `json:"mlock,omitempty"`           // --mlock
-	NoMmap        *bool    `json:"noMmap,omitempty"`          // --no-mmap
-	Jinja         *bool    `json:"jinja,omitempty"`           // --jinja
+	// GPU / 显存
+	Mode        *string  `json:"mode,omitempty"`        // cpu / gpu
+	NGpuLayers  *FlexStr `json:"nGpuLayers,omitempty"`  // -ngl：数字、auto 或 all
+	Fit         *string  `json:"fit,omitempty"`         // -fit on/off
+	FitTarget   *string  `json:"fitTarget,omitempty"`   // -fitt，每设备目标剩余显存 MiB
+	FitCtx      *int     `json:"fitCtx,omitempty"`      // -fitc
+	Device      *string  `json:"device,omitempty"`      // --device，如 CUDA0、Vulkan0
+	SplitMode   *string  `json:"splitMode,omitempty"`   // -sm
+	TensorSplit *string  `json:"tensorSplit,omitempty"` // -ts
+	MainGPU     *int     `json:"mainGpu,omitempty"`     // -mg
+	CPUMoe      *bool    `json:"cpuMoe,omitempty"`      // -cmoe
+	NCPUMoe     *int     `json:"nCpuMoe,omitempty"`     // -ncmoe
+	KVOffload   *bool    `json:"kvOffload,omitempty"`   // false 时 -nkvo
+	// 上下文与性能
+	CtxSize      *int    `json:"ctxSize,omitempty"`      // -c
+	Threads      *int    `json:"threads,omitempty"`      // -t
+	ThreadsBatch *int    `json:"threadsBatch,omitempty"` // -tb
+	BatchSize    *int    `json:"batchSize,omitempty"`    // -b
+	UBatchSize   *int    `json:"ubatchSize,omitempty"`   // -ub
+	Parallel     *int    `json:"parallel,omitempty"`     // -np
+	FlashAttn    *string `json:"flashAttn,omitempty"`    // -fa on/off/auto
+	CacheTypeK   *string `json:"cacheTypeK,omitempty"`   // -ctk
+	CacheTypeV   *string `json:"cacheTypeV,omitempty"`   // -ctv
+	CacheRAM     *int    `json:"cacheRam,omitempty"`     // -cram
+	Mlock        *bool   `json:"mlock,omitempty"`        // --mlock
+	NoMmap       *bool   `json:"noMmap,omitempty"`       // --no-mmap
+	ContextShift *bool   `json:"contextShift,omitempty"` // --context-shift
+	// 采样
 	Temp          *float64 `json:"temp,omitempty"`            // --temp
 	TopK          *int     `json:"topK,omitempty"`            // --top-k
 	TopP          *float64 `json:"topP,omitempty"`            // --top-p
 	MinP          *float64 `json:"minP,omitempty"`            // --min-p
 	RepeatPenalty *float64 `json:"repeatPenalty,omitempty"`   // --repeat-penalty
 	PresencePen   *float64 `json:"presencePenalty,omitempty"` // --presence-penalty
-	Host          *string  `json:"host,omitempty"`            // --host
-	Port          *int     `json:"port,omitempty"`            // --port，0 表示自动分配
-	APIKey        *string  `json:"apiKey,omitempty"`          // --api-key
-	Alias         *string  `json:"alias,omitempty"`           // -a（仅模型参数有意义）
-	ExtraArgs     *string  `json:"extraArgs,omitempty"`       // 附加参数
+	Seed          *int     `json:"seed,omitempty"`            // -s
+	NPredict      *int     `json:"nPredict,omitempty"`        // -n
+	// 模板与推理
+	Jinja           *bool   `json:"jinja,omitempty"`           // --jinja / --no-jinja
+	Reasoning       *string `json:"reasoning,omitempty"`       // -rea on/off/auto
+	ReasoningBudget *int    `json:"reasoningBudget,omitempty"` // --reasoning-budget
+	ChatTplKwargs   *string `json:"chatTemplateKwargs,omitempty"`
+	// 服务
+	Host    *string `json:"host,omitempty"`    // --host
+	Port    *int    `json:"port,omitempty"`    // --port，0 表示自动分配
+	APIKey  *string `json:"apiKey,omitempty"`  // --api-key
+	Alias   *string `json:"alias,omitempty"`   // -a（仅模型参数有意义）
+	WebUI   *bool   `json:"webui,omitempty"`   // false 时 --no-webui
+	Metrics *bool   `json:"metrics,omitempty"` // --metrics
+
+	ExtraArgs *string `json:"extraArgs,omitempty"` // 附加参数
 }
 
 // LastRun 记录模型组上次的启动选择，作为下次启动的默认值。
 type LastRun struct {
 	Variant string `json:"variant"` // 模型文件路径
+	Mode    string `json:"mode"`    // cpu / gpu，空表示按参数配置
 	Vision  bool   `json:"vision"`
 	Mmproj  string `json:"mmproj"`
 	Extra   string `json:"extra"`
@@ -65,7 +91,7 @@ type Config struct {
 func defaultParams() Params {
 	return Params{
 		Mode:       ptr("gpu"),
-		NGpuLayers: ptr(FlexStr("999")),
+		NGpuLayers: ptr(FlexStr("auto")),
 		CtxSize:    ptr(4096),
 		Host:       ptr("127.0.0.1"),
 		Port:       ptr(0),

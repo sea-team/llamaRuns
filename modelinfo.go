@@ -147,18 +147,22 @@ func (f *InfoFetcher) Fetch(g Group, src, repo string, refresh bool) (*ModelInfo
 	}
 	mi := &ModelInfo{Source: src, FetchedAt: time.Now()}
 	var err error
-	for _, kw := range Keywords(g) {
-		mi.Keyword = kw
-		if src == "ms" {
-			mi.Candidates, err = f.searchMS(kw)
-		} else {
-			mi.Candidates, err = f.searchHF(kw)
-		}
-		if err != nil {
-			return nil, err
-		}
-		if len(mi.Candidates) > 0 {
-			break
+	// 优先搜索 GGUF 仓库，全部关键字都无结果时再放宽为普通搜索
+search:
+	for _, gguf := range []bool{true, false} {
+		for _, kw := range Keywords(g) {
+			mi.Keyword = kw
+			if src == "ms" {
+				mi.Candidates, err = f.searchMS(kw, gguf)
+			} else {
+				mi.Candidates, err = f.searchHF(kw, gguf)
+			}
+			if err != nil {
+				return nil, err
+			}
+			if len(mi.Candidates) > 0 {
+				break search
+			}
 		}
 	}
 	if src == "ms" {
@@ -229,8 +233,11 @@ func (f *InfoFetcher) get(hf bool, u string) (string, error) {
 	return string(b), nil
 }
 
-func (f *InfoFetcher) searchHF(kw string) ([]Candidate, error) {
+func (f *InfoFetcher) searchHF(kw string, gguf bool) ([]Candidate, error) {
 	u := f.hfBase() + "/api/models?limit=20&sort=downloads&search=" + url.QueryEscape(kw)
+	if gguf {
+		u += "&filter=gguf"
+	}
 	body, err := f.get(true, u)
 	if err != nil {
 		return nil, fmt.Errorf("HuggingFace 搜索失败：%v（可在设置中配置代理或镜像地址）", err)
@@ -249,14 +256,18 @@ func (f *InfoFetcher) searchHF(kw string) ([]Candidate, error) {
 	return out, nil
 }
 
-func (f *InfoFetcher) searchMS(kw string) ([]Candidate, error) {
+func (f *InfoFetcher) searchMS(kw string, gguf bool) ([]Candidate, error) {
 	c, err := f.client(false)
 	if err != nil {
 		return nil, err
 	}
-	payload, _ := json.Marshal(map[string]any{
+	body := map[string]any{
 		"PageSize": 20, "PageNumber": 1, "SortBy": "Default", "Target": "", "SingleCriterion": []any{}, "Name": kw,
-	})
+	}
+	if gguf {
+		body["Criterion"] = []any{map[string]any{"category": "libraries", "predicate": "contains", "values": []string{"gguf"}}}
+	}
+	payload, _ := json.Marshal(body)
 	req, _ := http.NewRequest(http.MethodPut, "https://www.modelscope.cn/api/v1/dolphin/models", bytes.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.Do(req)

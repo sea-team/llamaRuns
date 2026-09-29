@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,7 +22,14 @@ import (
 )
 
 type GPUStat struct {
+	Vendor   string  `json:"vendor"`
 	Name     string  `json:"name"`
+	Driver   string  `json:"driver"`
+	CUDA     string  `json:"cuda"`
+	Power    float64 `json:"power"`      // W
+	PowerCap float64 `json:"powerLimit"` // W
+	Fan      float64 `json:"fan"`        // %
+	PState   string  `json:"pstate"`
 	Util     float64 `json:"util"`     // %
 	MemUsed  uint64  `json:"memUsed"`  // bytes
 	MemTotal uint64  `json:"memTotal"` // bytes
@@ -182,26 +191,50 @@ func runTool(bin string, args ...string) (string, error) {
 	return string(out), err
 }
 
-// GPUInfo 返回显卡工具的原始输出（nvidia-smi / rocm-smi / amd-smi），都不存在时 Tool 为空。
-type GPUInfo struct {
-	Tool   string `json:"tool"`
-	Output string `json:"output"`
+var (
+	cudaOnce sync.Once
+	cudaVer  string
+	cudaRe   = regexp.MustCompile(`CUDA Version:\s*([\d.]+)`)
+)
+
+// nvidiaCUDA 返回驱动支持的最高 CUDA 版本（来自 nvidia-smi 表头）。
+func nvidiaCUDA() string {
+	cudaOnce.Do(func() {
+		if out, err := runTool(nvidiaSMI); err == nil {
+			if m := cudaRe.FindStringSubmatch(out); m != nil {
+				cudaVer = m[1]
+			}
+		}
+	})
+	return cudaVer
 }
 
-func GetGPUInfo() GPUInfo {
-	switch {
-	case nvidiaSMI != "":
-		out, _ := runTool(nvidiaSMI)
-		return GPUInfo{"nvidia-smi", out}
-	case rocmSMI != "":
-		out, _ := runTool(rocmSMI)
-		return GPUInfo{"rocm-smi", out}
-	case amdSMI != "":
-		out, _ := runTool(amdSMI, "list")
-		return GPUInfo{"amd-smi", out}
-	}
-	return GPUInfo{}
+// HostInfo 是不随时间变化的系统信息。
+type HostInfo struct {
+	Hostname  string `json:"hostname"`
+	OS        string `json:"os"`
+	Platform  string `json:"platform"`
+	Arch      string `json:"arch"`
+	CPUModel  string `json:"cpuModel"`
+	Physical  int    `json:"physicalCores"`
+	Logical   int    `json:"logicalCores"`
+	BootTime  uint64 `json:"bootTime"`
+	GoVersion string `json:"goVersion"`
 }
+
+var hostInfo = sync.OnceValue(func() HostInfo {
+	h := HostInfo{OS: runtime.GOOS, Arch: runtime.GOARCH, GoVersion: runtime.Version()}
+	if hi, err := host.Info(); err == nil {
+		h.Hostname, h.BootTime = hi.Hostname, hi.BootTime
+		h.Platform = strings.TrimSpace(hi.Platform + " " + hi.PlatformVersion)
+	}
+	if ci, err := cpu.Info(); err == nil && len(ci) > 0 {
+		h.CPUModel = strings.TrimSpace(ci[0].ModelName)
+	}
+	h.Physical, _ = cpu.Counts(false)
+	h.Logical, _ = cpu.Counts(true)
+	return h
+})
 
 // rocmStats 解析 rocm-smi 的 JSON 输出（字段名随版本略有差异，按关键字匹配）。
 func rocmStats() []GPUStat {
@@ -228,7 +261,7 @@ func rocmStats() []GPUStat {
 	sort.Strings(keys)
 	var gs []GPUStat
 	for _, k := range keys {
-		g := GPUStat{Name: "AMD " + k}
+		g := GPUStat{Vendor: "AMD", Name: "AMD " + k}
 		for f, v := range data[k] {
 			lf := strings.ToLower(f)
 			str := fmt.Sprint(v)
@@ -255,20 +288,21 @@ func nvidiaStats() []GPUStat {
 	if nvidiaSMI == "" {
 		return nil
 	}
-	out, err := runTool(nvidiaSMI, "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu", "--format=csv,noheader,nounits")
+	out, err := runTool(nvidiaSMI, "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu,driver_version,power.draw,power.limit,fan.speed,pstate", "--format=csv,noheader,nounits")
 	if err != nil {
 		return nil
 	}
 	var gs []GPUStat
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		f := strings.Split(line, ",")
-		if len(f) < 5 {
+		if len(f) < 10 {
 			continue
 		}
 		num := func(s string) float64 { v, _ := strconv.ParseFloat(strings.TrimSpace(s), 64); return v }
 		gs = append(gs, GPUStat{
-			Name: strings.TrimSpace(f[0]), Util: num(f[1]),
+			Vendor: "NVIDIA", Name: strings.TrimSpace(f[0]), Util: num(f[1]),
 			MemUsed: uint64(num(f[2]) * 1024 * 1024), MemTotal: uint64(num(f[3]) * 1024 * 1024), Temp: num(f[4]),
+			Driver: strings.TrimSpace(f[5]), CUDA: nvidiaCUDA(), Power: num(f[6]), PowerCap: num(f[7]), Fan: num(f[8]), PState: strings.TrimSpace(f[9]),
 		})
 	}
 	return gs
@@ -288,7 +322,7 @@ func amdSysfsStats() []GPUStat {
 			v, _ := strconv.ParseFloat(strings.TrimSpace(string(b)), 64)
 			return v
 		}
-		g := GPUStat{Name: "AMD GPU (" + filepath.Base(filepath.Dir(dev)) + ")", Util: read("gpu_busy_percent"),
+		g := GPUStat{Vendor: "AMD", Name: "AMD GPU (" + filepath.Base(filepath.Dir(dev)) + ")", Util: read("gpu_busy_percent"),
 			MemUsed: uint64(read("mem_info_vram_used")), MemTotal: uint64(read("mem_info_vram_total"))}
 		if hw, _ := filepath.Glob(filepath.Join(dev, "hwmon", "hwmon*", "temp1_input")); len(hw) > 0 {
 			if b, err := os.ReadFile(hw[0]); err == nil {

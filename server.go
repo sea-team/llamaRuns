@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -76,6 +77,7 @@ func (a *App) findGroup(id string) (Group, bool) {
 // runReq 是启动/生成命令的请求；未指定的项使用上次启动的选择。
 type runReq struct {
 	Variant string  `json:"variant"`
+	Mode    *string `json:"mode"` // cpu / gpu / 空（按参数配置）
 	Vision  *bool   `json:"vision"`
 	Mmproj  string  `json:"mmproj"`
 	Extra   *string `json:"extra"`
@@ -87,6 +89,7 @@ type runPlan struct {
 	opt   RunOpt
 	bin   string
 	last  LastRun
+	mode  string // 实际运行方式
 }
 
 func (a *App) plan(g Group, r runReq) (*runPlan, error) {
@@ -120,14 +123,21 @@ func (a *App) plan(g Group, r runReq) (*runPlan, error) {
 	if r.Extra != nil {
 		extra = *r.Extra
 	}
+	reqMode := last.Mode
+	if r.Mode != nil {
+		reqMode = *r.Mode
+	}
+	if reqMode != "cpu" && reqMode != "gpu" {
+		reqMode = ""
+	}
 	sv := a.servers(false)
 	p := a.cfg.Effective(g.Key)
-	mode := EffectiveMode(p, sv.GPUOK)
+	mode := runMode(p, RunOpt{Mode: reqMode, GPUOK: sv.GPUOK})
 	bin, cpuBuild, err := ServerBinary(cfg, mode)
 	if err != nil {
 		err = fmt.Errorf("找不到 %s 版 llama-server：%v", strings.ToUpper(mode), err)
 	}
-	opt := RunOpt{GPUOK: sv.GPUOK, CPUBuild: cpuBuild, Extra: extra}
+	opt := RunOpt{Mode: reqMode, GPUOK: sv.GPUOK, CPUBuild: cpuBuild, Extra: extra}
 	if cpuBuild && sv.CPU != nil {
 		opt.DeviceFlag = sv.CPU.DeviceFlag
 	} else {
@@ -137,7 +147,7 @@ func (a *App) plan(g Group, r runReq) (*runPlan, error) {
 		opt.Mmproj = mmproj
 	}
 	return &runPlan{model: model, p: p, opt: opt, bin: bin,
-		last: LastRun{Variant: model.Path, Vision: vision, Mmproj: mmproj, Extra: extra}}, err
+		last: LastRun{Variant: model.Path, Mode: reqMode, Vision: vision, Mmproj: mmproj, Extra: extra}, mode: mode}, err
 }
 
 func contains(list []string, s string) bool {
@@ -236,7 +246,7 @@ func (a *App) Routes() http.Handler {
 	}))
 	mux.HandleFunc("GET /api/groups/{id}/run", a.withGroup(func(w http.ResponseWriter, r *http.Request, g Group) {
 		pl, _ := a.plan(g, runReq{})
-		writeJSON(w, map[string]any{"variant": pl.last.Variant, "vision": pl.last.Vision, "mmproj": pl.last.Mmproj, "extra": pl.last.Extra})
+		writeJSON(w, map[string]any{"variant": pl.last.Variant, "mode": pl.mode, "vision": pl.last.Vision, "mmproj": pl.last.Mmproj, "extra": pl.last.Extra, "gpuOk": pl.opt.GPUOK})
 	}))
 	mux.HandleFunc("POST /api/groups/{id}/command", a.withGroup(func(w http.ResponseWriter, r *http.Request, g Group) {
 		var req runReq
@@ -260,7 +270,7 @@ func (a *App) Routes() http.Handler {
 		cliArgs, _ := BuildArgs(pl.model, pl.p, o)
 		res := map[string]any{
 			"server": quoteCmd(bin, args), "cli": quoteCmd(CLIBinary(pl.bin), cliArgs),
-			"autoPort": derefI(pl.p.Port) == 0, "mode": EffectiveMode(pl.p, o.GPUOK),
+			"autoPort": derefI(pl.p.Port) == 0, "mode": pl.mode,
 		}
 		if perr != nil {
 			res["warn"] = perr.Error()
@@ -282,6 +292,34 @@ func (a *App) Routes() http.Handler {
 		}
 		_ = a.cfg.SetLastRun(g.Key, pl.last)
 		writeJSON(w, in)
+	}))
+	mux.HandleFunc("POST /api/groups/{id}/terminal", a.withGroup(func(w http.ResponseWriter, r *http.Request, g Group) {
+		var req runReq
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		pl, err := a.plan(g, req)
+		if err != nil {
+			writeErr(w, 400, err)
+			return
+		}
+		o := pl.opt
+		o.CLI = true
+		args, err := BuildArgs(pl.model, pl.p, o)
+		if err != nil {
+			writeErr(w, 400, err)
+			return
+		}
+		cli, err := exec.LookPath(CLIBinary(pl.bin))
+		if err != nil {
+			writeErr(w, 400, "找不到 llama-cli（应与 llama-server 位于同一目录）："+CLIBinary(pl.bin))
+			return
+		}
+		term, err := OpenTerminal("llama-cli · "+pl.model.Name, filepath.Dir(cli), cli, args)
+		if err != nil {
+			writeErr(w, 400, err)
+			return
+		}
+		_ = a.cfg.SetLastRun(g.Key, pl.last)
+		writeJSON(w, map[string]any{"ok": true, "terminal": term})
 	}))
 	mux.HandleFunc("GET /api/groups/{id}/info", a.withGroup(func(w http.ResponseWriter, r *http.Request, g Group) {
 		q := r.URL.Query()
@@ -313,8 +351,11 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /api/stats", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, a.mon.Get())
 	})
-	mux.HandleFunc("GET /api/gpu", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, GetGPUInfo())
+	mux.HandleFunc("GET /api/host", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, hostInfo())
+	})
+	mux.HandleFunc("GET /api/guide", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, a.guide(r.URL.Query().Get("refresh") == "1"))
 	})
 	return mux
 }

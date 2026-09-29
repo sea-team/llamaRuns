@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -122,6 +123,7 @@ func ResolveServerPath(configured string) (string, error) {
 // RunOpt 是单次启动/生成命令的选项。
 type RunOpt struct {
 	Port       int
+	Mode       string // 本次指定的运行方式，空表示按参数配置
 	GPUOK      bool   // 系统与 GPU 版程序可用 GPU
 	DeviceFlag bool   // 所用程序支持 --device
 	CPUBuild   bool   // 使用的是独立的 CPU 版程序
@@ -130,94 +132,112 @@ type RunOpt struct {
 	CLI        bool   // 生成 llama-cli 参数（去掉服务端专用参数）
 }
 
+// argSpec 描述 Params 字段（JSON 名）到命令行参数的映射。
+type argSpec struct {
+	key, flag string
+	kind      int  // argVal：带值；argTrue：为 true 时加 flag；argFalse：为 false 时加 flag
+	gpu       bool // 仅 GPU 方式有效
+	server    bool // 仅 llama-server 有效
+}
+
+const (
+	argVal = iota
+	argTrue
+	argFalse
+)
+
+var argSpecs = []argSpec{
+	{key: "nGpuLayers", flag: "-ngl", gpu: true},
+	{key: "fit", flag: "-fit", gpu: true},
+	{key: "fitTarget", flag: "-fitt", gpu: true},
+	{key: "fitCtx", flag: "-fitc", gpu: true},
+	{key: "device", flag: "--device", gpu: true},
+	{key: "splitMode", flag: "-sm", gpu: true},
+	{key: "tensorSplit", flag: "-ts", gpu: true},
+	{key: "mainGpu", flag: "-mg", gpu: true},
+	{key: "cpuMoe", flag: "-cmoe", kind: argTrue, gpu: true},
+	{key: "nCpuMoe", flag: "-ncmoe", gpu: true},
+	{key: "kvOffload", flag: "-nkvo", kind: argFalse, gpu: true},
+	{key: "ctxSize", flag: "-c"},
+	{key: "threads", flag: "-t"},
+	{key: "threadsBatch", flag: "-tb"},
+	{key: "batchSize", flag: "-b"},
+	{key: "ubatchSize", flag: "-ub"},
+	{key: "parallel", flag: "-np", server: true},
+	{key: "flashAttn", flag: "-fa"},
+	{key: "cacheTypeK", flag: "-ctk"},
+	{key: "cacheTypeV", flag: "-ctv"},
+	{key: "cacheRam", flag: "-cram", server: true},
+	{key: "mlock", flag: "--mlock", kind: argTrue},
+	{key: "noMmap", flag: "--no-mmap", kind: argTrue},
+	{key: "contextShift", flag: "--context-shift", kind: argTrue},
+	{key: "temp", flag: "--temp"},
+	{key: "topK", flag: "--top-k"},
+	{key: "topP", flag: "--top-p"},
+	{key: "minP", flag: "--min-p"},
+	{key: "repeatPenalty", flag: "--repeat-penalty"},
+	{key: "presencePenalty", flag: "--presence-penalty"},
+	{key: "seed", flag: "-s"},
+	{key: "nPredict", flag: "-n"},
+	{key: "jinja", flag: "--jinja", kind: argTrue},
+	{key: "jinja", flag: "--no-jinja", kind: argFalse},
+	{key: "reasoning", flag: "-rea"},
+	{key: "reasoningBudget", flag: "--reasoning-budget"},
+	{key: "chatTemplateKwargs", flag: "--chat-template-kwargs"},
+	{key: "apiKey", flag: "--api-key", server: true},
+	{key: "webui", flag: "--no-webui", kind: argFalse, server: true},
+	{key: "metrics", flag: "--metrics", kind: argTrue, server: true},
+}
+
 // BuildArgs 根据生效参数生成命令行参数。
 func BuildArgs(m Model, p Params, o RunOpt) ([]string, error) {
+	if o.Mode != "" {
+		p.Mode = &o.Mode
+	}
+	cpu := EffectiveMode(p, o.GPUOK) == "cpu"
 	a := []string{"-m", m.Path}
-	add := func(k string, v any) { a = append(a, k, fmt.Sprint(v)) }
-	if EffectiveMode(p, o.GPUOK) == "cpu" {
-		if !o.CPUBuild {
-			add("-ngl", 0)
-			if o.DeviceFlag {
-				add("--device", "none")
+	if cpu && !o.CPUBuild {
+		a = append(a, "-ngl", "0")
+		if o.DeviceFlag {
+			a = append(a, "--device", "none")
+		}
+	}
+	vals := map[string]any{}
+	b, _ := json.Marshal(p)
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber() // 避免大整数被格式化为科学计数法
+	_ = dec.Decode(&vals)
+	for _, s := range argSpecs {
+		v, ok := vals[s.key]
+		if !ok || (s.gpu && cpu) || (s.server && o.CLI) {
+			continue
+		}
+		switch s.kind {
+		case argTrue:
+			if v == true {
+				a = append(a, s.flag)
 			}
+		case argFalse:
+			if v == false {
+				a = append(a, s.flag)
+			}
+		default:
+			str := strings.TrimSpace(fmt.Sprint(v))
+			if str == "" || str == "none" && s.key == "flashAttn" {
+				continue
+			}
+			a = append(a, s.flag, str)
 		}
-	} else {
-		if v := strings.TrimSpace(string(deref(p.NGpuLayers, ""))); v != "" {
-			add("-ngl", v)
-		}
-		if d := deref(p.Device, ""); d != "" {
-			add("--device", d)
-		}
-	}
-	if p.CtxSize != nil {
-		add("-c", *p.CtxSize)
-	}
-	if v := derefI(p.Threads); v > 0 {
-		add("-t", v)
-	}
-	if v := derefI(p.BatchSize); v > 0 {
-		add("-b", v)
-	}
-	if v := derefI(p.UBatchSize); v > 0 {
-		add("-ub", v)
-	}
-	if v := derefI(p.Parallel); v > 0 && !o.CLI {
-		add("-np", v)
-	}
-	if v := deref(p.FlashAttn, ""); v != "" && v != "none" {
-		add("-fa", v)
-	}
-	if v := deref(p.CacheTypeK, ""); v != "" {
-		add("-ctk", v)
-	}
-	if v := deref(p.CacheTypeV, ""); v != "" {
-		add("-ctv", v)
-	}
-	if deref(p.Mlock, false) {
-		a = append(a, "--mlock")
-	}
-	if deref(p.NoMmap, false) {
-		a = append(a, "--no-mmap")
-	}
-	if p.Jinja != nil {
-		if *p.Jinja {
-			a = append(a, "--jinja")
-		} else {
-			a = append(a, "--no-jinja")
-		}
-	}
-	if p.Temp != nil {
-		add("--temp", *p.Temp)
-	}
-	if p.TopK != nil {
-		add("--top-k", *p.TopK)
-	}
-	if p.TopP != nil {
-		add("--top-p", *p.TopP)
-	}
-	if p.MinP != nil {
-		add("--min-p", *p.MinP)
-	}
-	if p.RepeatPenalty != nil {
-		add("--repeat-penalty", *p.RepeatPenalty)
-	}
-	if p.PresencePen != nil {
-		add("--presence-penalty", *p.PresencePen)
 	}
 	if o.Mmproj != "" {
-		add("--mmproj", o.Mmproj)
+		a = append(a, "--mmproj", o.Mmproj)
 	}
 	if !o.CLI {
-		if v := deref(p.APIKey, ""); v != "" {
-			add("--api-key", v)
-		}
 		alias := deref(p.Alias, "")
 		if alias == "" {
 			alias = m.Name
 		}
-		add("-a", alias)
-		add("--host", deref(p.Host, "127.0.0.1"))
-		add("--port", o.Port)
+		a = append(a, "-a", alias, "--host", deref(p.Host, "127.0.0.1"), "--port", fmt.Sprint(o.Port))
 	}
 	for _, s := range []string{deref(p.ExtraArgs, ""), o.Extra} {
 		parts, err := SplitArgs(s)
@@ -227,6 +247,13 @@ func BuildArgs(m Model, p Params, o RunOpt) ([]string, error) {
 		a = append(a, parts...)
 	}
 	return a, nil
+}
+
+func runMode(p Params, o RunOpt) string {
+	if o.Mode != "" {
+		p.Mode = &o.Mode
+	}
+	return EffectiveMode(p, o.GPUOK)
 }
 
 // EffectiveMode 返回实际运行方式：无可用 GPU 时强制为 cpu。
@@ -367,7 +394,7 @@ func (m *Manager) Start(g Group, model Model, p Params, o RunOpt, bin string) (*
 	}
 	in := &Instance{
 		ID: g.ID, GroupName: g.Name, ModelName: model.Name, ModelPath: model.Path, Host: host, Port: port,
-		Mode: EffectiveMode(p, o.GPUOK), Vision: o.Mmproj != "",
+		Mode: runMode(p, o), Vision: o.Mmproj != "",
 		Args: args, Status: "loading", StartedAt: time.Now(),
 		logs: NewLogBuffer(cfg.MaxLogLines), done: make(chan struct{}),
 	}

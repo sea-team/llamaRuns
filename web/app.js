@@ -54,34 +54,60 @@ const ALIVE = ['loading', 'running', 'stopping'];
 
 // ---------- 参数字段定义 ----------
 const CACHE_TYPES = ['f16', 'bf16', 'q8_0', 'q5_1', 'q5_0', 'q4_1', 'q4_0', 'iq4_nl', 'f32'];
+const ONOFF = [['on', 'on'], ['off', 'off']];
 const FIELDS = [
+  { sec: 'GPU 与显存', note: '仅 GPU 运行方式生效' },
   { k: 'mode', label: '运行方式', type: 'select', opts: [['gpu', 'GPU'], ['cpu', 'CPU']], gpu: true },
-  { k: 'nGpuLayers', label: 'GPU 层数 -ngl', type: 'text', hint: '数字、auto 或 all；999 表示全部放到 GPU' },
-  { k: 'device', label: 'GPU 设备 --device', type: 'text', hint: '留空自动，如 CUDA0 / Vulkan0' },
+  { k: 'nGpuLayers', label: 'GPU 层数 -ngl', type: 'text', hint: '显存充裕（如 24GB+ 跑 7B/8B）填 999：全层卸载最快、行为确定可复现；显存紧张或多模型混跑用 auto 并开启 -fit，自动适配显存' },
+  { k: 'fit', label: '自动适配显存 -fit', type: 'select', opts: ONOFF, hint: '根据显存自动调整未设置的参数（新版默认 on）' },
+  { k: 'fitTarget', label: '每设备预留显存 -fitt (MiB)', type: 'text', hint: '默认 1024；多卡可用逗号分隔，如 1024,2048' },
+  { k: 'fitCtx', label: '-fit 最小上下文 -fitc', type: 'int', hint: '默认 4096' },
+  { k: 'device', label: 'GPU 设备 --device', type: 'text', hint: '留空自动，如 CUDA0 / Vulkan0，多个用逗号分隔' },
+  { k: 'splitMode', label: '多卡切分 -sm', type: 'select', opts: [['layer', 'layer（按层）'], ['row', 'row（按行）'], ['tensor', 'tensor'], ['none', 'none（单卡）']] },
+  { k: 'tensorSplit', label: '多卡比例 -ts', type: 'text', hint: '如 3,1' },
+  { k: 'mainGpu', label: '主 GPU -mg', type: 'int' },
+  { k: 'cpuMoe', label: 'MoE 专家全放 CPU -cmoe', type: 'bool' },
+  { k: 'nCpuMoe', label: '前 N 层 MoE 放 CPU -ncmoe', type: 'int', hint: '显存不足跑 MoE 模型时使用' },
+  { k: 'kvOffload', label: 'KV 缓存放 GPU', type: 'bool', hint: '关闭时传 -nkvo，节省显存但变慢' },
+  { sec: '上下文与性能' },
   { k: 'ctxSize', label: '上下文长度 -c', type: 'int', hint: '0 表示使用模型训练值（可能很占内存）' },
   { k: 'threads', label: 'CPU 线程数 -t', type: 'int', hint: '留空自动' },
-  { k: 'parallel', label: '并发槽数 -np', type: 'int' },
+  { k: 'threadsBatch', label: '批处理线程数 -tb', type: 'int', hint: '默认同 -t' },
+  { k: 'parallel', label: '并发槽数 -np', type: 'int', hint: '默认自动' },
   { k: 'batchSize', label: '批大小 -b', type: 'int' },
   { k: 'ubatchSize', label: '物理批大小 -ub', type: 'int' },
   { k: 'flashAttn', label: 'Flash Attention -fa', type: 'select', opts: [['auto', 'auto'], ['on', 'on'], ['off', 'off'], ['none', '不传递（旧版）']] },
   { k: 'cacheTypeK', label: 'K 缓存类型 -ctk', type: 'select', opts: CACHE_TYPES.map(v => [v, v]) },
-  { k: 'cacheTypeV', label: 'V 缓存类型 -ctv', type: 'select', opts: CACHE_TYPES.map(v => [v, v]), hint: '量化 V 缓存需开启 Flash Attention' },
-  { k: 'jinja', label: 'Jinja 模板 --jinja', type: 'bool' },
+  { k: 'cacheTypeV', label: 'V 缓存类型 -ctv', type: 'select', opts: CACHE_TYPES.map(v => [v, v]), hint: 'q8_0 可省一半 KV 显存' },
+  { k: 'cacheRam', label: '提示缓存上限 -cram (MiB)', type: 'int', hint: '默认 8192，-1 不限，0 关闭' },
   { k: 'mlock', label: '锁定内存 --mlock', type: 'bool' },
   { k: 'noMmap', label: '禁用 mmap --no-mmap', type: 'bool' },
-  { k: 'temp', label: '温度 --temp', type: 'float' },
-  { k: 'topK', label: 'Top-K --top-k', type: 'int' },
-  { k: 'topP', label: 'Top-P --top-p', type: 'float' },
-  { k: 'minP', label: 'Min-P --min-p', type: 'float' },
-  { k: 'repeatPenalty', label: '重复惩罚 --repeat-penalty', type: 'float' },
-  { k: 'presencePenalty', label: '存在惩罚 --presence-penalty', type: 'float' },
+  { k: 'contextShift', label: '上下文平移 --context-shift', type: 'bool', hint: '超长生成时丢弃早期内容' },
+  { sec: '采样' },
+  { k: 'temp', label: '温度 --temp', type: 'float', hint: '默认 0.8' },
+  { k: 'topK', label: 'Top-K --top-k', type: 'int', hint: '默认 40' },
+  { k: 'topP', label: 'Top-P --top-p', type: 'float', hint: '默认 0.95' },
+  { k: 'minP', label: 'Min-P --min-p', type: 'float', hint: '默认 0.05' },
+  { k: 'repeatPenalty', label: '重复惩罚 --repeat-penalty', type: 'float', hint: '默认 1.0（关闭）' },
+  { k: 'presencePenalty', label: '存在惩罚 --presence-penalty', type: 'float', hint: '默认 0' },
+  { k: 'seed', label: '随机种子 -s', type: 'int', hint: '-1 随机' },
+  { k: 'nPredict', label: '最大生成长度 -n', type: 'int', hint: '-1 不限' },
+  { sec: '模板与推理' },
+  { k: 'jinja', label: 'Jinja 模板 --jinja', type: 'bool', hint: '新版默认开启' },
+  { k: 'reasoning', label: '思考模式 -rea', type: 'select', opts: [['auto', 'auto'], ['on', 'on'], ['off', 'off']] },
+  { k: 'reasoningBudget', label: '思考预算 --reasoning-budget', type: 'int', hint: '-1 不限，0 立即结束思考' },
+  { k: 'chatTemplateKwargs', label: '模板参数 --chat-template-kwargs', type: 'text', hint: `JSON，如 {"enable_thinking":false}` },
+  { sec: '服务', note: '仅 llama-server 生效' },
   { k: 'host', label: '监听地址 --host', type: 'text', hint: '0.0.0.0 允许局域网访问' },
   { k: 'port', label: '端口 --port', type: 'int', hint: '0 表示自动分配' },
   { k: 'apiKey', label: 'API Key --api-key', type: 'text' },
   { k: 'alias', label: '模型别名 -a', type: 'text', modelOnly: true, hint: '留空使用文件名' },
-  { k: 'extraArgs', label: '附加参数（原样追加到命令行）', type: 'textarea', wide: true, hint: '例如：--n-cpu-moe 10 --reasoning-budget 0' },
+  { k: 'webui', label: '内置 Web UI', type: 'bool', hint: '关闭时传 --no-webui' },
+  { k: 'metrics', label: '监控指标 --metrics', type: 'bool' },
+  { sec: '其它' },
+  { k: 'extraArgs', label: '附加参数（原样追加到命令行）', type: 'textarea', wide: true, hint: '其它参数见 llama-server --help，例如：--rope-scaling yarn --swa-full' },
 ];
-const FIELD_LABEL = Object.fromEntries(FIELDS.map(f => [f.k, f.label]));
+const FIELD_LABEL = Object.fromEntries(FIELDS.filter(f => f.k).map(f => [f.k, f.label]));
 
 function showVal(f, v) {
   if (v === undefined || v === null) return '';
@@ -94,6 +120,13 @@ function renderFields(container, values, inherit, isModel) {
   const gpuOK = state.server.gpuOk !== false;
   container.innerHTML = '';
   for (const f of FIELDS) {
+    if (f.sec) {
+      const h = document.createElement('div');
+      h.className = 'fsec';
+      h.innerHTML = esc(f.sec) + (f.note ? ` <small>${esc(f.note)}</small>` : '');
+      container.appendChild(h);
+      continue;
+    }
     if (f.modelOnly && !isModel) continue;
     const v = values[f.k];
     const inh = showVal(f, inherit[f.k]);
@@ -122,7 +155,7 @@ function renderFields(container, values, inherit, isModel) {
 
 function collectFields(container) {
   const out = {};
-  for (const f of FIELDS) {
+  for (const f of FIELDS.filter(f => f.k)) {
     const el = container.querySelector(`[name="${f.k}"]`);
     if (!el) continue;
     const raw = el.value.trim();
@@ -162,43 +195,102 @@ function openDialog(title, bodyHTML, buttons = []) {
 
 // ---------- 目录/文件选择器（由服务端列目录，可得到绝对路径） ----------
 // mode: 'dir' 选择目录；'server' 选择 llama-server 程序文件或其所在目录。
+const RECENT_KEY = 'recentDirs';
 function pickPath(title, start, mode) {
   return new Promise(resolve => {
-    let cur = '';
+    let cur = '', chosen = '', filter = '', data = null;
     let done = false;
-    const finish = v => { if (!done) { done = true; resolve(v); } };
+    const finish = v => {
+      if (done) return;
+      done = true;
+      if (v) {
+        const d = mode === 'dir' ? v : cur;
+        const rec = [d, ...JSON.parse(lsGet(RECENT_KEY) || '[]').filter(x => x !== d)].slice(0, 6);
+        lsSet(RECENT_KEY, JSON.stringify(rec));
+      }
+      resolve(v);
+    };
+    const isServer = n => /^llama-server(\.exe)?$/i.test(n);
     const body = openDialog(title, `
-      <div class="picker-path"><button type="button" id="pkUp">上级</button><input id="pkPath"><button type="button" id="pkGo">转到</button></div>
-      <div id="pkRoots" class="roots"></div>
-      <div id="pkList" class="fs-list"></div>
-      <p class="muted small">${mode === 'server' ? '点击 llama-server 程序文件选中，或进入其所在目录后点「选择当前目录」。' : '进入目标目录后点「选择当前目录」。'}</p>`, [
+      <div class="picker">
+        <div class="picker-top">
+          <button type="button" id="pkUp" title="上级目录">⬆</button>
+          <input id="pkPath" spellcheck="false" placeholder="输入路径后回车">
+          <input id="pkFilter" placeholder="筛选…" style="flex:0 0 120px">
+        </div>
+        <div id="pkCrumbs" class="crumbs"></div>
+        <div class="picker-main">
+          <div id="pkSide" class="picker-side"></div>
+          <div id="pkList" class="picker-list"></div>
+        </div>
+        <div id="pkSel" class="picker-sel"></div>
+      </div>`, [
       { text: '取消', onClick: () => { finish(null); } },
-      { text: '选择当前目录', cls: 'primary', onClick: () => { finish(cur); } },
+      { text: '确定', cls: 'primary', onClick: () => { finish(chosen || cur); } },
     ]);
     $('#dlg').addEventListener('close', () => finish(null), { once: true });
+    const join = n => data.path.endsWith(data.sep) ? data.path + n : data.path + data.sep + n;
+    const showSel = () => {
+      $('#pkSel', body).innerHTML = `将选择：<b>${esc(chosen || cur)}</b>` +
+        (mode === 'server' && !chosen ? '（目录，程序会在其中查找 llama-server）' : '');
+    };
+    const render = () => {
+      const f = filter.toLowerCase();
+      const dirs = data.dirs.filter(n => !f || n.toLowerCase().includes(f));
+      const files = data.files.filter(n => !f || n.toLowerCase().includes(f));
+      // 服务端程序排在文件最前
+      files.sort((a, b) => isServer(b) - isServer(a));
+      $('#pkList', body).innerHTML = dirs.map(n => `<div class="fs-item" data-dir="${esc(join(n))}"><span class="ic">📁</span><span class="nm">${esc(n)}</span></div>`).join('') +
+        files.map(n => `<div class="fs-item file${isServer(n) ? ' hl' : ''}${join(n) === chosen ? ' sel' : ''}" data-file="${esc(join(n))}"><span class="ic">${isServer(n) ? '⚙️' : '📄'}</span><span class="nm">${esc(n)}</span>${isServer(n) ? '<span class="hint">推荐</span>' : ''}</div>`).join('') ||
+        `<div class="fs-item muted">${f ? '没有匹配项' : '（空目录）'}</div>`;
+    };
     const load = async p => {
       try {
-        const r = await api(`/api/fs?files=${mode === 'server' ? 1 : 0}&path=${encodeURIComponent(p || '')}`);
-        cur = r.path;
-        $('#pkPath', body).value = r.path;
-        $('#pkUp', body).disabled = !r.parent;
-        $('#pkUp', body).onclick = () => load(r.parent);
-        $('#pkRoots', body).innerHTML = (r.roots || []).map(x => `<button type="button" data-p="${esc(x)}">${esc(x)}</button>`).join('');
-        const join = n => r.path.endsWith(r.sep) ? r.path + n : r.path + r.sep + n;
-        const list = $('#pkList', body);
-        list.innerHTML = r.dirs.map(n => `<div data-dir="${esc(join(n))}">📁 ${esc(n)}</div>`).join('') +
-          r.files.map(n => `<div class="file${/^llama-server(\.exe)?$/i.test(n) ? ' hl' : ''}" data-file="${esc(join(n))}">📄 ${esc(n)}</div>`).join('') ||
-          '<div class="muted">（空目录）</div>';
+        data = await api(`/api/fs?files=${mode === 'server' ? 1 : 0}&path=${encodeURIComponent(p || '')}`);
+        cur = data.path; chosen = ''; filter = '';
+        $('#pkFilter', body).value = '';
+        $('#pkPath', body).value = cur;
+        $('#pkUp', body).disabled = !data.parent;
+        $('#pkUp', body).onclick = () => load(data.parent);
+        // 面包屑
+        const parts = [];
+        let acc = '';
+        const segs = cur.split(data.sep).filter((x, i) => x || i === 0);
+        segs.forEach((seg, i) => {
+          acc = i === 0 ? (seg === '' ? data.sep : seg + data.sep) : (acc.endsWith(data.sep) ? acc : acc + data.sep) + seg;
+          parts.push(`<button type="button" data-p="${esc(acc)}">${esc(seg || data.sep)}</button>`);
+        });
+        $('#pkCrumbs', body).innerHTML = parts.join('<span class="sep">›</span>');
+        // 侧栏：位置与最近使用
+        const recent = JSON.parse(lsGet(RECENT_KEY) || '[]');
+        $('#pkSide', body).innerHTML = '<div class="lbl">位置</div>' +
+          (data.roots || []).map(x => `<button type="button" data-p="${esc(x)}" title="${esc(x)}" class="${cur === x ? 'on' : ''}">${x.length <= 3 ? '💽' : '🏠'} ${esc(x)}</button>`).join('') +
+          (recent.length ? '<div class="lbl">最近使用</div>' + recent.map(x => `<button type="button" data-p="${esc(x)}" title="${esc(x)}">🕘 ${esc(baseName(x) || x)}</button>`).join('') : '');
+        render();
+        // 当前目录包含 llama-server 时自动选中
+        if (mode === 'server') {
+          const hit = data.files.find(isServer);
+          if (hit) { chosen = join(hit); render(); }
+        }
+        showSel();
       } catch (e) { toast(e.message, true); }
     };
-    $('#pkRoots', body).onclick = e => { const b = e.target.closest('[data-p]'); if (b) load(b.dataset.p); };
-    $('#pkList', body).onclick = e => {
+    body.addEventListener('click', e => {
+      const b = e.target.closest('[data-p]');
+      if (b) load(b.dataset.p);
+    });
+    const list = $('#pkList', body);
+    list.onclick = e => {
       const d = e.target.closest('[data-dir]');
       if (d) return load(d.dataset.dir);
       const f = e.target.closest('[data-file]');
+      if (f) { chosen = f.dataset.file; render(); showSel(); }
+    };
+    list.ondblclick = e => {
+      const f = e.target.closest('[data-file]');
       if (f) { finish(f.dataset.file); $('#dlg').close(); }
     };
-    $('#pkGo', body).onclick = () => load($('#pkPath', body).value);
+    $('#pkFilter', body).oninput = e => { filter = e.target.value; render(); };
     $('#pkPath', body).onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); load(e.target.value); } };
     load(start);
   });
@@ -213,34 +305,84 @@ function switchTab(name) {
 }
 
 // ---------- 系统状态 ----------
-function barHTML(pct) {
+const HIST_LEN = 90; // 保留约 3 分钟历史
+const hist = {};
+function pushHist(key, v) {
+  (hist[key] ||= []).push(v);
+  if (hist[key].length > HIST_LEN) hist[key].shift();
+}
+function sparkSVG(key) {
+  const d = hist[key] || [];
+  if (d.length < 2) return '<svg class="spark"></svg>';
+  const w = 300, h = 36, step = w / (HIST_LEN - 1), x0 = w - (d.length - 1) * step;
+  const pts = d.map((v, i) => `${(x0 + i * step).toFixed(1)},${(h - Math.max(0, Math.min(100, v)) / 100 * (h - 2) - 1).toFixed(1)}`);
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><path class="area" d="M${pts[0].split(',')[0]},${h}L${pts.join('L')}L${w},${h}Z"/><path d="M${pts.join('L')}"/></svg>`;
+}
+function levelCls(p) { return p >= 90 ? 'high' : p >= 75 ? 'mid' : ''; }
+function metricHTML(label, pct, text, key) {
   const p = Math.max(0, Math.min(100, pct || 0));
-  const cls = p >= 90 ? 'high' : p >= 75 ? 'mid' : '';
-  return `<span class="bar"><i class="${cls}" style="width:${p}%"></i></span>`;
+  return `<div class="metric"><div class="row"><span>${label}</span><span>${text}</span></div>
+    <div class="big"><i class="${levelCls(p)}" style="width:${p}%"></i></div>${key ? sparkSVG(key) : ''}</div>`;
 }
-function tempHTML(t) {
-  if (!t) return '';
-  return ` <span class="${t >= 85 ? 'hot' : ''}">${t.toFixed(0)}℃</span>`;
-}
-async function refreshStats() {
+function tempText(t) { return t ? `<span class="${t >= 85 ? 'hot' : ''}">${t.toFixed(0)}℃</span>` : '—'; }
+
+async function loadHost() {
   try {
-    const s = await api('/api/stats');
-    state.stats = s;
-    let h = `<span class="stat">CPU ${barHTML(s.cpuPercent)} ${s.cpuPercent.toFixed(0)}%${tempHTML(s.cpuTemp)}</span>`;
-    h += `<span class="stat">内存 ${barHTML(s.memPercent)} ${fmtBytes(s.memUsed)}/${fmtBytes(s.memTotal)}</span>`;
-    if (s.swapTotal) {
-      const sp = s.swapUsed / s.swapTotal * 100;
-      h += `<span class="stat">交换 ${barHTML(sp)} ${fmtBytes(s.swapUsed)}/${fmtBytes(s.swapTotal)}</span>`;
-    }
-    (s.gpus || []).forEach((g, i) => {
-      const mp = g.memTotal ? g.memUsed / g.memTotal * 100 : 0;
-      h += `<span class="stat" title="${esc(g.name)}">GPU${i} ${barHTML(g.util)} ${g.util.toFixed(0)}%${tempHTML(g.temp)}</span>`;
-      if (g.memTotal) h += `<span class="stat" title="${esc(g.name)}">显存${i} ${barHTML(mp)} ${fmtBytes(g.memUsed)}/${fmtBytes(g.memTotal)}</span>`;
-    });
-    $('#stats').innerHTML = h;
-    updateInstanceMem();
-  } catch (e) { /* 忽略临时错误 */ }
+    const h = await api('/api/host');
+    const up = h.bootTime ? Math.floor((Date.now() / 1000 - h.bootTime) / 3600) : 0;
+    $('#sysHost').textContent = [h.hostname, h.platform || h.os, h.arch, up ? `已运行 ${up} 小时` : ''].filter(Boolean).join(' · ');
+    state.host = h;
+  } catch (e) { }
 }
+
+async function refreshStats() {
+  let s;
+  try { s = await api('/api/stats'); } catch (e) { return; }
+  state.stats = s;
+  const swapPct = s.swapTotal ? s.swapUsed / s.swapTotal * 100 : 0;
+  pushHist('cpu', s.cpuPercent);
+  pushHist('mem', s.memPercent);
+  (s.gpus || []).forEach((g, i) => {
+    pushHist('gpu' + i, g.util);
+    pushHist('vram' + i, g.memTotal ? g.memUsed / g.memTotal * 100 : 0);
+  });
+  // 顶部精简状态：只显示最关键的占用率，便于在其它页面留意是否爆内存
+  const vram = (s.gpus || []).filter(g => g.memTotal).map(g => g.memUsed / g.memTotal * 100);
+  const pctB = p => `<b class="${p >= 90 ? 'hot' : ''}">${p.toFixed(0)}%</b>`;
+  $('#miniStat').innerHTML = `CPU ${pctB(s.cpuPercent)} · 内存 ${pctB(s.memPercent)}` + (vram.length ? ` · 显存 ${vram.map(pctB).join('/')}` : '');
+  updateInstanceMem();
+  if (!$('#tab-system').classList.contains('active')) return;
+
+  const h = state.host || {};
+  let cards = `<div class="card"><h4>CPU <small title="${esc(h.cpuModel)}">${esc(h.cpuModel || '')}</small></h4>
+    ${metricHTML('占用率', s.cpuPercent, s.cpuPercent.toFixed(0) + '%', 'cpu')}
+    <div class="kv"><span>温度</span><span>${tempText(s.cpuTemp)}</span><span>核心</span><span>${h.physicalCores || '?'} 物理 / ${h.logicalCores || s.cpuCores} 逻辑</span></div></div>`;
+  cards += `<div class="card"><h4>内存 <small>${fmtBytes(s.memTotal)}</small></h4>
+    ${metricHTML('已用', s.memPercent, `${fmtBytes(s.memUsed)} / ${fmtBytes(s.memTotal)}（${s.memPercent.toFixed(0)}%）`, 'mem')}
+    ${s.swapTotal ? metricHTML('交换 / 虚拟内存', swapPct, `${fmtBytes(s.swapUsed)} / ${fmtBytes(s.swapTotal)}`) : ''}
+    <div class="kv"><span>可用</span><span>${fmtBytes(s.memTotal - s.memUsed)}</span></div></div>`;
+  (s.gpus || []).forEach((g, i) => {
+    const mp = g.memTotal ? g.memUsed / g.memTotal * 100 : 0;
+    const kv = [['温度', tempText(g.temp)]];
+    if (g.power) kv.push(['功耗', `${g.power.toFixed(0)} W${g.powerLimit ? ' / ' + g.powerLimit.toFixed(0) + ' W' : ''}`]);
+    if (g.fan) kv.push(['风扇', g.fan.toFixed(0) + '%']);
+    if (g.pstate) kv.push(['性能状态', esc(g.pstate)]);
+    if (g.driver) kv.push(['驱动', esc(g.driver)]);
+    if (g.cuda) kv.push(['CUDA', esc(g.cuda)]);
+    cards += `<div class="card"><h4>GPU ${i} <small title="${esc(g.name)}">${esc(g.name)}</small></h4>
+      ${metricHTML('占用率', g.util, g.util.toFixed(0) + '%', 'gpu' + i)}
+      ${g.memTotal ? metricHTML('显存', mp, `${fmtBytes(g.memUsed)} / ${fmtBytes(g.memTotal)}（${mp.toFixed(0)}%）`, 'vram' + i) : ''}
+      <div class="kv">${kv.map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join('')}</div></div>`;
+  });
+  if (!(s.gpus || []).length) cards += `<div class="card"><h4>GPU</h4><div class="muted small">未检测到 NVIDIA / AMD 显卡监控工具（nvidia-smi / rocm-smi），不显示显卡信息。</div></div>`;
+  $('#sysCards').innerHTML = cards;
+
+  const alive = state.instances.filter(i => ALIVE.includes(i.status));
+  $('#sysProcs').innerHTML = alive.length ? `<table class="procs"><tr><th>模型</th><th>方式</th><th>端口</th><th>进程内存</th><th>CPU</th></tr>${alive.map(i =>
+    `<tr><td>${esc(i.modelName)}</td><td>${(i.mode || '').toUpperCase()}</td><td>${i.port}</td><td>${fmtBytes(s.procMem?.[i.id] || 0)}</td><td>${(s.procCpu?.[i.id] || 0).toFixed(0)}%</td></tr>`).join('')}</table>`
+    : '<div class="muted small">暂无运行中的模型</div>';
+}
+$('#miniStat').onclick = () => { switchTab('system'); refreshStats(); };
 
 // ---------- 模型列表（按组折叠） ----------
 async function loadModels() {
@@ -328,17 +470,22 @@ async function runDialog(g, mode, variant) {
   const sel = variant || def.variant;
   const variantHTML = g.variants.length > 1 ? `<label>模型版本<select id="rVariant">${g.variants.map(v =>
     `<option value="${esc(v.path)}"${v.path === sel ? ' selected' : ''}>${esc(v.quant || v.name)} · ${fmtBytes(v.size)}${v.path === g.lastVariant ? '（上次运行）' : ''} — ${esc(v.file)}</option>`).join('')}</select></label>` : '';
+  const modeHTML = def.gpuOk
+    ? `<label style="margin-top:8px">运行方式<span class="seg" id="rMode" style="display:flex;width:max-content;margin-top:4px">${[['gpu', 'GPU'], ['cpu', 'CPU']].map(([v, l]) =>
+      `<button type="button" data-mode="${v}" class="${def.mode === v ? 'active' : ''}">${l}</button>`).join('')}</span></label>`
+    : '<div class="muted small" style="margin-top:8px">未检测到可用 GPU，将以 CPU 方式运行</div>';
   const visionHTML = g.mmprojs.length ? `<label class="inline" style="margin-top:8px"><input type="checkbox" id="rVision"${def.vision ? ' checked' : ''}> 启用视觉功能（--mmproj）</label>` +
     (g.mmprojs.length > 1 ? `<label>视觉投影文件<select id="rMmproj">${g.mmprojs.map(p => `<option value="${esc(p)}"${p === def.mmproj ? ' selected' : ''}>${esc(baseName(p))}</option>`).join('')}</select></label>` : `<div class="muted small">投影文件：${esc(baseName(g.mmprojs[0]))}</div>`) : '';
   const serverBox = cmdBox('cmdServer', 'llama-server 命令：');
   const cliBox = cmdBox('cmdCli', 'llama-cli 命令（在终端中直接对话）：');
-  const body = openDialog((mode === 'start' ? '启动模型：' : '运行命令：') + g.name, `${warn}${variantHTML}${visionHTML}
+  const body = openDialog((mode === 'start' ? '启动模型：' : '运行命令：') + g.name, `${warn}${variantHTML}${modeHTML}${visionHTML}
     <label style="margin-top:8px">本次附加参数<textarea id="rExtra" rows="2" placeholder="例如：--seed 42">${esc(def.extra || '')}</textarea></label>
     <div id="rWarn" class="hot small"></div>
     ${state.os === 'windows' ? '<div class="muted small">命令为 PowerShell 格式；在 cmd 中使用时去掉开头的「& 」。</div>' : ''}
     ${mode === 'cli' ? cliBox + serverBox : serverBox + cliBox}`,
     mode === 'start' ? [
       { text: '取消', onClick: () => true },
+      { text: '在终端运行 llama-cli', onClick: () => runInTerminal() },
       {
         text: '启动', cls: 'primary', onClick: async () => {
           await api(`/api/groups/${g.id}/start`, { method: 'POST', body: req() });
@@ -349,9 +496,15 @@ async function runDialog(g, mode, variant) {
           switchTab('instances');
         }
       },
-    ] : [{ text: '关闭', onClick: () => true }]);
+    ] : [{ text: '关闭', onClick: () => true }, { text: '在终端运行 llama-cli', cls: 'primary', onClick: () => runInTerminal() }]);
+  let runMode = def.gpuOk ? def.mode : '';
+  const runInTerminal = async () => {
+    const r = await api(`/api/groups/${g.id}/terminal`, { method: 'POST', body: req() });
+    toast(`已在 ${r.terminal} 中打开 llama-cli`);
+  };
   const req = () => ({
     variant: $('#rVariant', body)?.value || sel,
+    mode: runMode,
     vision: $('#rVision', body)?.checked ?? false,
     mmproj: $('#rMmproj', body)?.value || g.mmprojs[0] || '',
     extra: $('#rExtra', body).value,
@@ -366,7 +519,16 @@ async function runDialog(g, mode, variant) {
   };
   let t;
   body.oninput = body.onchange = () => { clearTimeout(t); t = setTimeout(preview, 250); };
-  body.onclick = e => { const b = e.target.closest('[data-copy]'); if (b) copyText($('#' + b.dataset.copy, body).textContent); };
+  body.onclick = e => {
+    const b = e.target.closest('[data-copy]');
+    if (b) copyText($('#' + b.dataset.copy, body).textContent);
+    const m = e.target.closest('[data-mode]');
+    if (m) {
+      runMode = m.dataset.mode;
+      body.querySelectorAll('[data-mode]').forEach(x => x.classList.toggle('active', x === m));
+      preview();
+    }
+  };
   preview();
 }
 
@@ -658,15 +820,6 @@ async function probeServer(refresh) {
     $('#infoCpu').innerHTML = s.cpu ? probeHTML(s.cpu) : '未配置';
   } catch (e) { $('#infoGpu').textContent = e.message; }
 }
-async function loadGPUInfo() {
-  try {
-    const g = await api('/api/gpu');
-    $('#gpuBox').hidden = !g.tool;
-    $('#gpuTool').textContent = g.tool ? `（${g.tool}）` : '';
-    $('#gpuOut').textContent = g.output || '';
-  } catch (e) { }
-}
-$('#btnGpu').onclick = loadGPUInfo;
 $('#btnProbe').onclick = async () => {
   try {
     await saveSettings(true);
@@ -697,13 +850,105 @@ $('#settingsForm').onsubmit = async e => {
   try { await saveSettings(); await probeServer(true); loadModels(); } catch (err) { toast(err.message, true); }
 };
 
+// ---------- 引导 ----------
+const OS_NAME = { windows: 'Windows', linux: 'Linux', darwin: 'macOS', android: 'Android' };
+async function saveConfigPatch(patch) {
+  await api('/api/config', { method: 'PUT', body: { ...state.config, ...patch } });
+  await loadConfig();
+}
+async function loadGuide(refresh) {
+  const el = $('#guideBody');
+  if (refresh || !el.dataset.loaded) el.innerHTML = '<div class="muted">正在检测系统并获取 llama.cpp 最新发布信息…</div>';
+  let gi;
+  try { gi = await api('/api/guide' + (refresh ? '?refresh=1' : '')); } catch (e) { el.textContent = e.message; return; }
+  el.dataset.loaded = '1';
+  state.guide = gi;
+  const gpuRecs = gi.recs.filter(r => r.kind === 'gpu');
+  const cpuRecs = gi.recs.filter(r => r.kind === 'cpu');
+  const recHTML = r => `<div class="rec${r.alt ? ' alt' : ''}"><strong>${esc(r.title)}</strong>${r.alt ? ' <span class="tag">备选</span>' : ' <span class="tag running">推荐</span>'}
+    ${r.note ? `<div class="muted small">${esc(r.note)}</div>` : ''}
+    <div class="dl">${r.assets.map((a, i) => `<a class="btn${i ? ' sec' : ''}" href="${esc(a.url)}" target="_blank" rel="noopener">⬇ ${esc(a.name)} <span style="opacity:.75">${fmtBytes(a.size)}</span></a>`).join('')}</div></div>`;
+  const sv = gi.servers;
+  const svLine = (label, si, conf) => !conf && !si?.path ? `<div>${label}：<span class="muted">未配置</span></div>` :
+    si?.path ? `<div>${label}：<span class="ok-text">✔</span> ${esc(si.path)} <span class="muted">（${esc(si.version || '版本未知')}${si.devices?.length ? '，' + si.devices.map(esc).join('；') : '，仅 CPU'}）</span></div>`
+      : `<div>${label}：<span class="hot">✘ ${esc(si?.error || '未找到')}</span></div>`;
+  const step3Done = !!(sv.gpu?.path || sv.cpu?.path);
+  const step4Done = gi.modelCount > 0;
+  const mac = gi.os === 'darwin';
+  el.innerHTML = `
+  <div class="step done"><div class="num">1</div><div class="body"><h3>系统检测</h3>
+    <div>系统：<b>${esc(OS_NAME[gi.os] || gi.os)}</b> · 架构：<b>${esc(gi.arch)}</b></div>
+    <div style="margin-top:4px">显卡：${gi.gpus.length ? gi.gpus.map(g => `<span class="chip">${esc(g.vendor)} · ${esc(g.name)}</span>`).join('') : '<span class="muted">未检测到独立显卡</span>'}
+      ${gi.cuda ? `<span class="chip">驱动支持 CUDA ${esc(gi.cuda)}</span>` : ''}</div>
+    <div style="margin-top:6px">${mac ? 'macOS 版同一程序同时支持 Metal GPU 与 CPU 运行。' : gpuRecs.length
+      ? '可同时使用 <b>GPU</b> 与 <b>CPU</b> 方式运行：建议分别下载 GPU 版与 CPU 版，GPU 版用于日常加速，CPU 版用于显存不足或对比测试。'
+      : '未发现可用于加速的显卡，建议仅下载 <b>CPU 版</b>。'}</div>
+  </div></div>
+
+  <div class="step"><div class="num">2</div><div class="body"><h3>下载 llama.cpp ${gi.release ? `<a href="${esc(gi.release.url)}" target="_blank" rel="noopener">${esc(gi.release.tag)}</a> <span class="muted small">发布于 ${new Date(gi.release.published).toLocaleString()}</span>` : ''}</h3>
+    ${gi.error ? `<div class="hot small">${esc(gi.error)}</div><div class="small">也可直接打开 <a href="https://github.com/ggml-org/llama.cpp/releases" target="_blank" rel="noopener">GitHub Releases</a> 手动下载。</div>` : `
+      ${gpuRecs.length ? `<div class="small muted" style="margin-top:4px">GPU 版</div>${gpuRecs.map(recHTML).join('')}` : ''}
+      ${cpuRecs.length ? `<div class="small muted" style="margin-top:8px">CPU 版</div>${cpuRecs.map(recHTML).join('')}` : ''}
+      ${!gi.recs.length ? '<div class="muted">未找到适合当前系统的预编译包，请参考 llama.cpp 文档自行编译。</div>' : ''}`}
+    <div class="muted small" style="margin-top:6px">下载后分别解压到独立目录，例如 <code>${gi.os === 'windows' ? 'D:\\llama.cpp\\gpu' : '~/llama.cpp/gpu'}</code> 与 <code>${gi.os === 'windows' ? 'D:\\llama.cpp\\cpu' : '~/llama.cpp/cpu'}</code>。${gi.os === 'android' ? '在 Termux 中解压并 <code>chmod +x llama-*</code>。' : ''}
+      <button type="button" id="gRefresh" style="margin-left:6px">重新获取</button></div>
+  </div></div>
+
+  <div class="step${step3Done ? ' done' : ''}"><div class="num">3</div><div class="body"><h3>配置程序路径</h3>
+    ${svLine(mac ? '程序' : 'GPU 版', sv.gpu, state.config.serverPathGpu)}
+    ${mac ? '' : svLine('CPU 版', sv.cpu, state.config.serverPathCpu)}
+    <div class="dl" style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+      <button type="button" class="primary" data-gpick="serverPathGpu">选择${mac ? '' : ' GPU 版'}目录…</button>
+      ${mac ? '' : '<button type="button" data-gpick="serverPathCpu">选择 CPU 版目录…</button>'}
+    </div>
+  </div></div>
+
+  <div class="step${step4Done ? ' done' : ''}"><div class="num">4</div><div class="body"><h3>添加模型目录</h3>
+    <div>已添加 ${gi.modelDirs} 个目录，共找到 <b>${gi.modelCount}</b> 个模型文件。</div>
+    <div class="muted small">可在 <a href="https://www.modelscope.cn/models?name=GGUF" target="_blank" rel="noopener">ModelScope</a> 或 <a href="https://huggingface.co/models?library=gguf" target="_blank" rel="noopener">HuggingFace</a> 下载 GGUF 格式模型，放到 <code>目录/模型.gguf</code> 或 <code>目录/子目录/模型.gguf</code>。</div>
+    <button type="button" id="gAddDir" style="margin-top:8px">添加模型目录…</button>
+  </div></div>
+
+  <div class="step${step3Done && step4Done ? ' done' : ''}"><div class="num">5</div><div class="body"><h3>开始使用</h3>
+    <button type="button" class="primary" id="gGo" ${step3Done && step4Done ? '' : 'disabled'}>去启动模型</button>
+  </div></div>`;
+  $('#gRefresh').onclick = () => loadGuide(true);
+  $('#gGo').onclick = () => switchTab('models');
+  el.querySelectorAll('[data-gpick]').forEach(b => b.onclick = async () => {
+    const k = b.dataset.gpick;
+    const p = await pickPath('选择 llama-server 所在目录', state.config[k] || '', 'server');
+    if (!p) return;
+    try {
+      await saveConfigPatch({ [k]: p });
+      await probeServer(true);
+      loadGuide();
+    } catch (e) { toast(e.message, true); }
+  });
+  $('#gAddDir').onclick = async () => {
+    const p = await pickPath('添加模型目录', '', 'dir');
+    if (!p) return;
+    try {
+      const dirs = state.config.modelDirs || [];
+      if (!dirs.includes(p)) await saveConfigPatch({ modelDirs: [...dirs, p] });
+      await loadModels();
+      loadGuide();
+    } catch (e) { toast(e.message, true); }
+  };
+}
+document.querySelector('.tabs [data-tab=guide]').addEventListener('click', () => loadGuide());
+document.querySelector('.tabs [data-tab=system]').addEventListener('click', () => refreshStats());
+
 // ---------- 初始化 ----------
 (async function init() {
   const t = lsGet('tab'); if (t) switchTab(t);
   try { await loadConfig(); } catch (e) { toast('加载配置失败：' + e.message, true); }
   await probeServer();
   renderFields($('#globalParams'), state.config?.global || {}, state.defaults, false);
-  loadGPUInfo();
+  loadHost();
+  // 首次使用（找不到 llama-server 或未添加模型目录）时打开引导页
+  const noServer = !state.server.gpu?.path && !state.server.cpu?.path;
+  if (noServer || !(state.config?.modelDirs || []).length) switchTab('guide');
+  if ($('#tab-guide').classList.contains('active')) loadGuide();
   await loadInstances();
   await loadModels();
   refreshStats();
