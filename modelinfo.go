@@ -11,7 +11,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -21,6 +23,14 @@ type Candidate struct {
 	URL       string `json:"url"`
 }
 
+// Recommend 是从模型说明中提取的推荐参数。
+type Recommend struct {
+	Key     string  `json:"key"` // 对应 Params 的 JSON 字段名
+	Value   float64 `json:"value"`
+	Source  string  `json:"source"`
+	Snippet string  `json:"snippet"`
+}
+
 type ModelInfo struct {
 	Source     string      `json:"source"` // hf / ms
 	Keyword    string      `json:"keyword"`
@@ -28,17 +38,14 @@ type ModelInfo struct {
 	URL        string      `json:"url"`
 	SearchURL  string      `json:"searchUrl"`
 	Readme     string      `json:"readme"`
+	BaseModel  string      `json:"baseModel"`
+	Recommends []Recommend `json:"recommends"`
 	Candidates []Candidate `json:"candidates"`
 	FetchedAt  time.Time   `json:"fetchedAt"`
 }
 
-var (
-	quantRe = regexp.MustCompile(`(?i)[-_.](ud-)?(i?q\d+(_[a-z0-9]+)*|f16|f32|bf16|fp16|fp8|mxfp4)$`)
-	httpc   = &http.Client{Timeout: 20 * time.Second}
-)
-
 // Keywords 由模型文件名/所在目录推导搜索关键字，按优先级排列。
-func Keywords(m Model) []string {
+func Keywords(g Group) []string {
 	var ks []string
 	seen := map[string]bool{}
 	push := func(s string) {
@@ -48,26 +55,15 @@ func Keywords(m Model) []string {
 			ks = append(ks, s)
 		}
 	}
-	name := m.Name
-	if mm := splitRe.FindStringSubmatch(name + ".gguf"); mm != nil {
-		name = name[:len(name)-len(mm[0])+len(".gguf")]
-	}
-	for quantRe.MatchString(name) {
-		name = quantRe.ReplaceAllString(name, "")
-	}
+	name := BaseName(g.Variants[0].Name)
 	push(name)
+	if g.Dir != "" {
+		push(BaseName(strings.TrimSuffix(strings.TrimSuffix(g.Dir, "-GGUF"), "-gguf")))
+	}
 	if i := strings.LastIndexAny(name, "-_"); i > 0 {
 		push(name[:i])
 	}
-	// 子目录名常为仓库名，作为兜底关键字
-	if dir := filepath.Dir(m.Path); !samePath(dir, m.Root) {
-		push(filepath.Base(dir))
-	}
 	return ks
-}
-
-func samePath(a, b string) bool {
-	return filepath.Clean(a) == filepath.Clean(b)
 }
 
 func score(repo string, kw string, downloads int64) float64 {
@@ -99,17 +95,48 @@ func score(repo string, kw string, downloads int64) float64 {
 type InfoFetcher struct {
 	cacheDir string
 	cfg      *ConfigStore
+
+	mu      sync.Mutex
+	clients map[string]*http.Client
+}
+
+// client 返回 HTTP 客户端：配置了代理且（访问 HF 或设置为全部走代理）时使用代理，否则使用系统环境代理。
+func (f *InfoFetcher) client(hf bool) (*http.Client, error) {
+	cfg := f.cfg.Get()
+	proxy := strings.TrimSpace(cfg.Proxy)
+	if !hf && !cfg.ProxyAll {
+		proxy = ""
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.clients == nil {
+		f.clients = map[string]*http.Client{}
+	}
+	if c := f.clients[proxy]; c != nil {
+		return c, nil
+	}
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	if proxy != "" {
+		u, err := url.Parse(proxy)
+		if err != nil || u.Host == "" {
+			return nil, fmt.Errorf("代理地址无效：%s", proxy)
+		}
+		tr.Proxy = http.ProxyURL(u)
+	}
+	c := &http.Client{Timeout: 20 * time.Second, Transport: tr}
+	f.clients[proxy] = c
+	return c, nil
 }
 
 func (f *InfoFetcher) cachePath(id, src string) string {
 	return filepath.Join(f.cacheDir, id+"_"+src+".json")
 }
 
-func (f *InfoFetcher) Fetch(m Model, src, repo string, refresh bool) (*ModelInfo, error) {
+func (f *InfoFetcher) Fetch(g Group, src, repo string, refresh bool) (*ModelInfo, error) {
 	if src != "ms" {
 		src = "hf"
 	}
-	cp := f.cachePath(m.ID, src)
+	cp := f.cachePath(g.ID, src)
 	if !refresh && repo == "" {
 		if b, err := os.ReadFile(cp); err == nil {
 			var mi ModelInfo
@@ -120,7 +147,7 @@ func (f *InfoFetcher) Fetch(m Model, src, repo string, refresh bool) (*ModelInfo
 	}
 	mi := &ModelInfo{Source: src, FetchedAt: time.Now()}
 	var err error
-	for _, kw := range Keywords(m) {
+	for _, kw := range Keywords(g) {
 		mi.Keyword = kw
 		if src == "ms" {
 			mi.Candidates, err = f.searchMS(kw)
@@ -149,16 +176,13 @@ func (f *InfoFetcher) Fetch(m Model, src, repo string, refresh bool) (*ModelInfo
 	}
 	if repo != "" {
 		mi.RepoID = repo
-		if src == "ms" {
-			mi.URL = "https://www.modelscope.cn/models/" + repo
-			mi.Readme, err = f.get("https://www.modelscope.cn/api/v1/models/" + repo + "/repo?Revision=master&FilePath=README.md")
-		} else {
-			mi.URL = f.hfBase() + "/" + repo
-			mi.Readme, err = f.get(f.hfBase() + "/" + repo + "/raw/main/README.md")
-		}
+		mi.URL = f.repoURL(src, repo)
+		mi.Readme, err = f.repoFile(src, repo, "README.md")
 		if err != nil {
 			mi.Readme = "（获取 README 失败：" + err.Error() + "）"
 		}
+		mi.BaseModel = baseModel(mi.Readme)
+		mi.Recommends = f.recommend(src, repo, mi.Readme, mi.BaseModel)
 	}
 	if b, err := json.Marshal(mi); err == nil {
 		_ = os.MkdirAll(f.cacheDir, 0o755)
@@ -171,8 +195,26 @@ func (f *InfoFetcher) hfBase() string {
 	return strings.TrimRight(f.cfg.Get().HFEndpoint, "/")
 }
 
-func (f *InfoFetcher) get(u string) (string, error) {
-	resp, err := httpc.Get(u)
+func (f *InfoFetcher) repoURL(src, repo string) string {
+	if src == "ms" {
+		return "https://www.modelscope.cn/models/" + repo
+	}
+	return f.hfBase() + "/" + repo
+}
+
+func (f *InfoFetcher) repoFile(src, repo, file string) (string, error) {
+	if src == "ms" {
+		return f.get(false, "https://www.modelscope.cn/api/v1/models/"+repo+"/repo?Revision=master&FilePath="+url.QueryEscape(file))
+	}
+	return f.get(true, f.hfBase()+"/"+repo+"/raw/main/"+file)
+}
+
+func (f *InfoFetcher) get(hf bool, u string) (string, error) {
+	c, err := f.client(hf)
+	if err != nil {
+		return "", err
+	}
+	resp, err := c.Get(u)
 	if err != nil {
 		return "", err
 	}
@@ -189,9 +231,9 @@ func (f *InfoFetcher) get(u string) (string, error) {
 
 func (f *InfoFetcher) searchHF(kw string) ([]Candidate, error) {
 	u := f.hfBase() + "/api/models?limit=20&sort=downloads&search=" + url.QueryEscape(kw)
-	body, err := f.get(u)
+	body, err := f.get(true, u)
 	if err != nil {
-		return nil, fmt.Errorf("HuggingFace 搜索失败：%v", err)
+		return nil, fmt.Errorf("HuggingFace 搜索失败：%v（可在设置中配置代理或镜像地址）", err)
 	}
 	var list []struct {
 		ID        string `json:"id"`
@@ -208,12 +250,16 @@ func (f *InfoFetcher) searchHF(kw string) ([]Candidate, error) {
 }
 
 func (f *InfoFetcher) searchMS(kw string) ([]Candidate, error) {
+	c, err := f.client(false)
+	if err != nil {
+		return nil, err
+	}
 	payload, _ := json.Marshal(map[string]any{
 		"PageSize": 20, "PageNumber": 1, "SortBy": "Default", "Target": "", "SingleCriterion": []any{}, "Name": kw,
 	})
 	req, _ := http.NewRequest(http.MethodPut, "https://www.modelscope.cn/api/v1/dolphin/models", bytes.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := httpc.Do(req)
+	resp, err := c.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("ModelScope 搜索失败：%v", err)
 	}
@@ -238,4 +284,109 @@ func (f *InfoFetcher) searchMS(kw string) ([]Candidate, error) {
 		out = append(out, Candidate{RepoID: id, Downloads: x.Downloads, URL: "https://www.modelscope.cn/models/" + id})
 	}
 	return out, nil
+}
+
+// ---------- 推荐参数 ----------
+
+var baseModelRe = regexp.MustCompile(`(?m)^base_model:\s*(?:\n\s*-\s*)?["']?([\w.\-]+/[\w.\-]+)`)
+
+// baseModel 从 README 的 YAML 头中读取 base_model。
+func baseModel(readme string) string {
+	if !strings.HasPrefix(readme, "---") {
+		return ""
+	}
+	end := strings.Index(readme[3:], "\n---")
+	if end < 0 {
+		return ""
+	}
+	if m := baseModelRe.FindStringSubmatch(readme[:end+3]); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
+type recRule struct {
+	key      string
+	re       *regexp.Regexp
+	min, max float64
+}
+
+const recSep = `(?:\s*(?:of|to|is|=|:)\s*|\s+|["'` + "`" + `*:=]+\s*)["'` + "`" + `]?`
+
+var recRules = []recRule{
+	{"temp", regexp.MustCompile(`(?i)(?:--temp(?:erature)?\b|\btemperature\b)` + recSep + `(\d+(?:\.\d+)?)`), 0, 2},
+	{"topP", regexp.MustCompile(`(?i)(?:--top-p\b|\btop[_ -]?p\b)` + recSep + `(\d+(?:\.\d+)?)`), 0, 1},
+	{"topK", regexp.MustCompile(`(?i)(?:--top-k\b|\btop[_ -]?k\b)` + recSep + `(\d+)\b`), 0, 1000},
+	{"minP", regexp.MustCompile(`(?i)(?:--min-p\b|\bmin[_ -]?p\b)` + recSep + `(\d+(?:\.\d+)?)`), 0, 1},
+	{"presencePenalty", regexp.MustCompile(`(?i)(?:--presence-penalty\b|\bpresence[_ ]penalty\b)` + recSep + `(\d+(?:\.\d+)?)`), 0, 3},
+	{"repeatPenalty", regexp.MustCompile(`(?i)(?:--repeat-penalty\b|\brepe(?:at|tition)[_ ]penalty\b)` + recSep + `(\d+(?:\.\d+)?)`), 0.5, 3},
+	{"ctxSize", regexp.MustCompile(`(?:--ctx-size|(?:^|\s)-c)[\s=]+(\d{3,7})\b`), 512, 4 << 20},
+}
+
+// extractRecs 在文本中查找每个参数第一次出现的推荐值。
+func extractRecs(text, source string, have map[string]bool) []Recommend {
+	var out []Recommend
+	for _, r := range recRules {
+		if have[r.key] {
+			continue
+		}
+		for _, m := range r.re.FindAllStringSubmatchIndex(text, 20) {
+			v, err := strconv.ParseFloat(text[m[2]:m[3]], 64)
+			if err != nil || v < r.min || v > r.max {
+				continue
+			}
+			a, b := max(m[0]-60, 0), min(m[1]+40, len(text))
+			snip := strings.Join(strings.Fields(text[a:b]), " ")
+			out = append(out, Recommend{Key: r.key, Value: v, Source: source, Snippet: snip})
+			have[r.key] = true
+			break
+		}
+	}
+	return out
+}
+
+// recommend 按优先级提取推荐参数：仓库 README -> 基础模型 README -> generation_config.json。
+func (f *InfoFetcher) recommend(src, repo, readme, base string) []Recommend {
+	have := map[string]bool{}
+	out := extractRecs(stripFrontMatter(readme), repo+" README", have)
+	hasSampling := func() bool { return have["temp"] || have["topP"] || have["topK"] }
+	if !hasSampling() && base != "" {
+		if rd, err := f.repoFile(src, base, "README.md"); err == nil {
+			out = append(out, extractRecs(stripFrontMatter(rd), base+" README", have)...)
+		}
+	}
+	for _, r := range []string{repo, base} {
+		if r == "" {
+			continue
+		}
+		body, err := f.repoFile(src, r, "generation_config.json")
+		if err != nil {
+			continue
+		}
+		var gc map[string]any
+		if json.Unmarshal([]byte(body), &gc) != nil {
+			continue
+		}
+		for k, key := range map[string]string{"temperature": "temp", "top_p": "topP", "top_k": "topK", "min_p": "minP", "repetition_penalty": "repeatPenalty"} {
+			if v, ok := gc[k].(float64); ok && !have[key] {
+				out = append(out, Recommend{Key: key, Value: v, Source: r + " generation_config.json", Snippet: fmt.Sprintf(`"%s": %v`, k, v)})
+				have[key] = true
+			}
+		}
+	}
+	order := map[string]int{}
+	for i, r := range recRules {
+		order[r.key] = i
+	}
+	sort.SliceStable(out, func(i, j int) bool { return order[out[i].Key] < order[out[j].Key] })
+	return out
+}
+
+func stripFrontMatter(s string) string {
+	if strings.HasPrefix(s, "---") {
+		if i := strings.Index(s[3:], "\n---"); i >= 0 {
+			return s[i+7:]
+		}
+	}
+	return s
 }

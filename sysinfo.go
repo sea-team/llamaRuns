@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -151,30 +154,113 @@ func gpuStats() []GPUStat {
 	if g := nvidiaStats(); len(g) > 0 {
 		return g
 	}
+	if g := rocmStats(); len(g) > 0 {
+		return g
+	}
 	return amdSysfsStats()
 }
 
-var nvidiaSMI = func() string {
-	if p, err := exec.LookPath("nvidia-smi"); err == nil {
+func lookTool(name string) string {
+	if p, err := exec.LookPath(name); err == nil {
 		return p
 	}
 	return ""
-}()
+}
+
+var (
+	nvidiaSMI = lookTool("nvidia-smi")
+	rocmSMI   = lookTool("rocm-smi")
+	amdSMI    = lookTool("amd-smi")
+)
+
+func runTool(bin string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c := exec.CommandContext(ctx, bin, args...)
+	prepareCmd(c)
+	out, err := c.CombinedOutput()
+	return string(out), err
+}
+
+// GPUInfo 返回显卡工具的原始输出（nvidia-smi / rocm-smi / amd-smi），都不存在时 Tool 为空。
+type GPUInfo struct {
+	Tool   string `json:"tool"`
+	Output string `json:"output"`
+}
+
+func GetGPUInfo() GPUInfo {
+	switch {
+	case nvidiaSMI != "":
+		out, _ := runTool(nvidiaSMI)
+		return GPUInfo{"nvidia-smi", out}
+	case rocmSMI != "":
+		out, _ := runTool(rocmSMI)
+		return GPUInfo{"rocm-smi", out}
+	case amdSMI != "":
+		out, _ := runTool(amdSMI, "list")
+		return GPUInfo{"amd-smi", out}
+	}
+	return GPUInfo{}
+}
+
+// rocmStats 解析 rocm-smi 的 JSON 输出（字段名随版本略有差异，按关键字匹配）。
+func rocmStats() []GPUStat {
+	if rocmSMI == "" {
+		return nil
+	}
+	out, err := runTool(rocmSMI, "--showproductname", "--showuse", "--showmeminfo", "vram", "--showtemp", "--json")
+	if err != nil {
+		return nil
+	}
+	var data map[string]map[string]any
+	if i := strings.Index(out, "{"); i >= 0 {
+		out = out[i:]
+	}
+	if json.Unmarshal([]byte(out), &data) != nil {
+		return nil
+	}
+	keys := make([]string, 0, len(data))
+	for k := range data {
+		if strings.HasPrefix(k, "card") {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	var gs []GPUStat
+	for _, k := range keys {
+		g := GPUStat{Name: "AMD " + k}
+		for f, v := range data[k] {
+			lf := strings.ToLower(f)
+			str := fmt.Sprint(v)
+			num, _ := strconv.ParseFloat(strings.TrimSpace(str), 64)
+			switch {
+			case strings.Contains(lf, "card series") || strings.Contains(lf, "card model") && g.Name == "AMD "+k:
+				g.Name = str
+			case strings.Contains(lf, "gpu use"):
+				g.Util = num
+			case strings.Contains(lf, "vram total used"):
+				g.MemUsed = uint64(num)
+			case strings.Contains(lf, "vram total memory"):
+				g.MemTotal = uint64(num)
+			case strings.Contains(lf, "temperature") && (g.Temp == 0 || strings.Contains(lf, "edge")):
+				g.Temp = num
+			}
+		}
+		gs = append(gs, g)
+	}
+	return gs
+}
 
 func nvidiaStats() []GPUStat {
 	if nvidiaSMI == "" {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	c := exec.CommandContext(ctx, nvidiaSMI, "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu", "--format=csv,noheader,nounits")
-	prepareCmd(c)
-	out, err := c.Output()
+	out, err := runTool(nvidiaSMI, "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu", "--format=csv,noheader,nounits")
 	if err != nil {
 		return nil
 	}
 	var gs []GPUStat
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		f := strings.Split(line, ",")
 		if len(f) < 5 {
 			continue

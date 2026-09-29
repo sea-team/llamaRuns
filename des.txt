@@ -16,3 +16,15 @@ llama-server 可配置cpu、gpu方式运行，如果系统无gpu支持仅屏蔽g
 
 要支持多平台运行：window,linux,Android,mac
 
+
+
+llama-server 路径、模型目录要支持通过选择目录的方式添加配置
+未支持cpu、gpu方式运行llama-server的路径配置，它是有区分cpu或gpu运行的，参见：https://github.com/ggml-org/llama.cpp/releases
+在启动模型旁边增加生成llama-cli命令方式运行的完全运行命令，方便复制执行使用
+最好能通过 在https://www.modelscope.cn/或https://huggingface.co/models 里获取到模型的最佳执行参数推荐设置
+支持gpu需要通过nvidia-smi命令显示显卡信息，对应A卡也用相应命令显示（如果没有则不显示）
+https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md 这里有 llama-server 运行说明
+在模型下有关联的视觉模型文件,在启动时可勾选是否启用视觉功能
+在模型目录下的模型可能存在不同版本的，可以启动模型时选择不同的版本运行，默认启动上次运行的模型。
+访问 huggingface.co 时获取模型信息时可能网络不通，可增加代理设置用于访问。
+对于是 目录名/多个不同规格的模型时，应该在展示改为可折叠展开方式，而不是直接按模型全部列出来

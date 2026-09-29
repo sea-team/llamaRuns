@@ -84,3 +84,36 @@ pre.cmd { background: var(--log-bg); color: var(--log-fg); padding: 8px; border-
   .bar { width: 44px; }
   .log { height: 50vh; }
 }
+.pick { display: flex; gap: 6px; }
+.pick input { flex: 1; }
+.probe { margin: 2px 0 10px; }
+.dir-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.dir-row { display: flex; gap: 6px; }
+.dir-row input { flex: 1; }
+.gpu-out { max-height: 320px; overflow: auto; white-space: pre; word-break: normal; }
+details.group > summary { list-style: none; cursor: pointer; }
+details.group > summary::-webkit-details-marker { display: none; }
+details.group > summary .arrow { display: inline-block; transition: transform .2s; margin-right: 4px; color: var(--muted); }
+details.group[open] > summary .arrow { transform: rotate(90deg); }
+details.group { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+details.group > summary.item { border: none; }
+.variants { border-top: 1px solid var(--line); padding: 4px 12px 8px 30px; }
+.variant { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px dashed var(--line); }
+.variant:last-child { border-bottom: none; }
+.variant .main { flex: 1; min-width: 200px; overflow-wrap: anywhere; }
+.tag.last { background: var(--primary); color: #fff; }
+.tag.vis { background: #8e44ad; color: #fff; }
+.picker-path { display: flex; gap: 6px; margin-bottom: 8px; }
+.picker-path input { flex: 1; }
+.roots { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.fs-list { border: 1px solid var(--line); border-radius: 6px; max-height: 50vh; overflow: auto; }
+.fs-list div { padding: 5px 10px; cursor: pointer; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.fs-list div:hover { background: var(--bg); }
+.fs-list .file { color: var(--muted); }
+.fs-list .file.hl { color: var(--primary); font-weight: 600; }
+.cmd-box { position: relative; }
+.cmd-box button { position: absolute; top: 6px; right: 6px; font-size: 12px; padding: 2px 8px; }
+.cmd-box pre { padding-right: 60px; }
+table.recs { width: 100%; border-collapse: collapse; margin: 6px 0; font-size: 13px; }
+table.recs td, table.recs th { border-bottom: 1px solid var(--line); padding: 4px 6px; text-align: left; vertical-align: top; }
+.recs-box { background: var(--bg); border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; }

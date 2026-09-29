@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -45,6 +46,10 @@ func main() {
 	}()
 
 	log.Printf("配置文件：%s", *cfgPath)
+	ln, err := net.Listen("tcp", *addr)
+	if err != nil {
+		log.Fatalf("监听 %s 失败：%v（可用 -addr 更换端口）", *addr, err)
+	}
 	fmt.Printf("llamaRunModel 面板已启动：http://%s\n", *addr)
-	log.Fatal(http.ListenAndServe(*addr, app.Routes()))
+	log.Fatal(http.Serve(ln, app.Routes()))
 }

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -72,8 +73,11 @@ func (b *LogBuffer) Unsubscribe(ch chan LogLine) {
 // ---------- 实例 ----------
 
 type Instance struct {
-	ID        string    `json:"id"` // 与模型 ID 相同
+	ID        string    `json:"id"` // 与模型组 ID 相同
+	GroupName string    `json:"groupName"`
 	ModelName string    `json:"modelName"`
+	Mode      string    `json:"mode"`
+	Vision    bool      `json:"vision"`
 	ModelPath string    `json:"modelPath"`
 	Host      string    `json:"host"`
 	Port      int       `json:"port"`
@@ -115,22 +119,31 @@ func ResolveServerPath(configured string) (string, error) {
 	return exec.LookPath(p)
 }
 
+// RunOpt 是单次启动/生成命令的选项。
+type RunOpt struct {
+	Port       int
+	GPUOK      bool   // 系统与 GPU 版程序可用 GPU
+	DeviceFlag bool   // 所用程序支持 --device
+	CPUBuild   bool   // 使用的是独立的 CPU 版程序
+	Mmproj     string // 启用视觉时的投影文件，为空表示不启用
+	Extra      string // 本次附加参数
+	CLI        bool   // 生成 llama-cli 参数（去掉服务端专用参数）
+}
+
 // BuildArgs 根据生效参数生成命令行参数。
-func BuildArgs(m Model, p Params, port int, gpuOK, deviceFlag bool, extra string) ([]string, error) {
+func BuildArgs(m Model, p Params, o RunOpt) ([]string, error) {
 	a := []string{"-m", m.Path}
 	add := func(k string, v any) { a = append(a, k, fmt.Sprint(v)) }
-	mode := deref(p.Mode, "gpu")
-	if !gpuOK {
-		mode = "cpu"
-	}
-	if mode == "cpu" {
-		add("-ngl", 0)
-		if deviceFlag {
-			add("--device", "none")
+	if EffectiveMode(p, o.GPUOK) == "cpu" {
+		if !o.CPUBuild {
+			add("-ngl", 0)
+			if o.DeviceFlag {
+				add("--device", "none")
+			}
 		}
 	} else {
-		if p.NGpuLayers != nil {
-			add("-ngl", *p.NGpuLayers)
+		if v := strings.TrimSpace(string(deref(p.NGpuLayers, ""))); v != "" {
+			add("-ngl", v)
 		}
 		if d := deref(p.Device, ""); d != "" {
 			add("--device", d)
@@ -148,7 +161,7 @@ func BuildArgs(m Model, p Params, port int, gpuOK, deviceFlag bool, extra string
 	if v := derefI(p.UBatchSize); v > 0 {
 		add("-ub", v)
 	}
-	if v := derefI(p.Parallel); v > 0 {
+	if v := derefI(p.Parallel); v > 0 && !o.CLI {
 		add("-np", v)
 	}
 	if v := deref(p.FlashAttn, ""); v != "" && v != "none" {
@@ -166,8 +179,12 @@ func BuildArgs(m Model, p Params, port int, gpuOK, deviceFlag bool, extra string
 	if deref(p.NoMmap, false) {
 		a = append(a, "--no-mmap")
 	}
-	if deref(p.Jinja, false) {
-		a = append(a, "--jinja")
+	if p.Jinja != nil {
+		if *p.Jinja {
+			a = append(a, "--jinja")
+		} else {
+			a = append(a, "--no-jinja")
+		}
 	}
 	if p.Temp != nil {
 		add("--temp", *p.Temp)
@@ -184,20 +201,25 @@ func BuildArgs(m Model, p Params, port int, gpuOK, deviceFlag bool, extra string
 	if p.RepeatPenalty != nil {
 		add("--repeat-penalty", *p.RepeatPenalty)
 	}
-	if v := deref(p.APIKey, ""); v != "" {
-		add("--api-key", v)
+	if p.PresencePen != nil {
+		add("--presence-penalty", *p.PresencePen)
 	}
-	if v := deref(p.Mmproj, ""); v != "" {
-		add("--mmproj", v)
+	if o.Mmproj != "" {
+		add("--mmproj", o.Mmproj)
 	}
-	alias := deref(p.Alias, "")
-	if alias == "" {
-		alias = m.Name
+	if !o.CLI {
+		if v := deref(p.APIKey, ""); v != "" {
+			add("--api-key", v)
+		}
+		alias := deref(p.Alias, "")
+		if alias == "" {
+			alias = m.Name
+		}
+		add("-a", alias)
+		add("--host", deref(p.Host, "127.0.0.1"))
+		add("--port", o.Port)
 	}
-	add("-a", alias)
-	add("--host", deref(p.Host, "127.0.0.1"))
-	add("--port", port)
-	for _, s := range []string{deref(p.ExtraArgs, ""), extra} {
+	for _, s := range []string{deref(p.ExtraArgs, ""), o.Extra} {
 		parts, err := SplitArgs(s)
 		if err != nil {
 			return nil, err
@@ -205,6 +227,42 @@ func BuildArgs(m Model, p Params, port int, gpuOK, deviceFlag bool, extra string
 		a = append(a, parts...)
 	}
 	return a, nil
+}
+
+// EffectiveMode 返回实际运行方式：无可用 GPU 时强制为 cpu。
+func EffectiveMode(p Params, gpuOK bool) string {
+	if !gpuOK || deref(p.Mode, "gpu") == "cpu" {
+		return "cpu"
+	}
+	return "gpu"
+}
+
+// ServerBinary 按运行方式选择 llama-server：GPU 方式用 GPU 版；
+// CPU 方式优先用 CPU 版，未配置时退回 GPU 版（并通过参数禁用 GPU）。
+func ServerBinary(cfg Config, mode string) (bin string, cpuBuild bool, err error) {
+	if mode == "cpu" && strings.TrimSpace(cfg.ServerPathCPU) != "" {
+		bin, err = ResolveServerPath(cfg.ServerPathCPU)
+		return bin, true, err
+	}
+	bin, err = ResolveServerPath(cfg.ServerPathGPU)
+	return bin, false, err
+}
+
+// CLIBinary 返回与 llama-server 同目录的 llama-cli。
+func CLIBinary(server string) string {
+	if server == "" {
+		return "llama-cli"
+	}
+	dir := filepath.Dir(server)
+	name := "llama-cli"
+	if strings.EqualFold(filepath.Ext(server), ".exe") {
+		name += ".exe"
+	}
+	p := filepath.Join(dir, name)
+	if _, err := os.Stat(p); err == nil {
+		return p
+	}
+	return p // 即使不存在也给出同目录路径，便于用户对照
 }
 
 func deref[T any](p *T, def T) T {
@@ -286,33 +344,30 @@ func (in *Instance) alive() bool {
 	return in.Status == "loading" || in.Status == "running" || in.Status == "stopping"
 }
 
-// Start 启动模型。非多开模式下会先停止其它正在运行的实例。
-func (m *Manager) Start(model Model, extra string, gpuOK, deviceFlag bool) (*Instance, error) {
+// Start 启动模型组 g 中的模型 model。非多开模式下会先停止其它正在运行的实例。
+func (m *Manager) Start(g Group, model Model, p Params, o RunOpt, bin string) (*Instance, error) {
 	cfg := m.cfg.Get()
-	bin, err := ResolveServerPath(cfg.LlamaServerPath)
-	if err != nil {
-		return nil, fmt.Errorf("找不到 llama-server：%v", err)
-	}
 	if !cfg.AllowMulti {
-		m.StopAll(model.ID)
+		m.StopAll(g.ID)
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if old := m.instances[model.ID]; old != nil && old.alive() {
+	if old := m.instances[g.ID]; old != nil && old.alive() {
 		return nil, errors.New("该模型已在运行")
 	}
-	p := m.cfg.Effective(model.Path)
 	host := deref(p.Host, "127.0.0.1")
 	port, err := m.pickPort(host, derefI(p.Port), cfg.BasePort)
 	if err != nil {
 		return nil, err
 	}
-	args, err := BuildArgs(model, p, port, gpuOK, deviceFlag, extra)
+	o.Port = port
+	args, err := BuildArgs(model, p, o)
 	if err != nil {
 		return nil, err
 	}
 	in := &Instance{
-		ID: model.ID, ModelName: model.Name, ModelPath: model.Path, Host: host, Port: port,
+		ID: g.ID, GroupName: g.Name, ModelName: model.Name, ModelPath: model.Path, Host: host, Port: port,
+		Mode: EffectiveMode(p, o.GPUOK), Vision: o.Mmproj != "",
 		Args: args, Status: "loading", StartedAt: time.Now(),
 		logs: NewLogBuffer(cfg.MaxLogLines), done: make(chan struct{}),
 	}
@@ -325,10 +380,10 @@ func (m *Manager) Start(model Model, extra string, gpuOK, deviceFlag bool) (*Ins
 		return nil, fmt.Errorf("启动失败：%v", err)
 	}
 	in.cmd, in.PID = cmd, cmd.Process.Pid
-	if _, ok := m.instances[model.ID]; !ok {
-		m.order = append(m.order, model.ID)
+	if _, ok := m.instances[g.ID]; !ok {
+		m.order = append(m.order, g.ID)
 	}
-	m.instances[model.ID] = in
+	m.instances[g.ID] = in
 
 	go pumpLogs(pr, in.logs)
 	go func() {
@@ -405,14 +460,26 @@ func pumpLogs(r io.Reader, lb *LogBuffer) {
 }
 
 func quoteCmd(bin string, args []string) string {
-	parts := []string{bin}
+	parts := []string{shellQuote(bin)}
 	for _, a := range args {
-		if a == "" || strings.ContainsAny(a, " \t\"'") {
-			a = strconv.Quote(a)
-		}
-		parts = append(parts, a)
+		parts = append(parts, shellQuote(a))
 	}
-	return strings.Join(parts, " ")
+	cmd := strings.Join(parts, " ")
+	if runtime.GOOS == "windows" && strings.HasPrefix(cmd, `"`) {
+		// PowerShell 需用 & 调用带引号的路径（在 cmd 中使用时去掉开头的 &）
+		return "& " + cmd
+	}
+	return cmd
+}
+
+func shellQuote(a string) string {
+	if a != "" && !strings.ContainsAny(a, " \t\"'&|<>()$`;*?!#%^") {
+		return a
+	}
+	if runtime.GOOS == "windows" {
+		return `"` + strings.ReplaceAll(a, `"`, `\"`) + `"`
+	}
+	return "'" + strings.ReplaceAll(a, "'", `'\''`) + "'"
 }
 
 // Stop 停止实例，先尝试优雅退出，超时后强制结束。

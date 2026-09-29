@@ -48,16 +48,35 @@
   <section id="tab-settings" class="tab">
     <form id="settingsForm" class="settings">
       <fieldset>
-        <legend>程序</legend>
-        <label>llama-server 路径
-          <input name="llamaServerPath" placeholder="留空则使用系统 PATH 中的 llama-server">
+        <legend>llama-server 程序</legend>
+        <p class="muted small">llama.cpp 的发布包分 CPU 版与 GPU 版（CUDA / Vulkan / ROCm 等）。运行方式为 GPU 时使用 GPU 版；为 CPU 时使用 CPU 版，未配置 CPU 版则用 GPU 版并禁用 GPU。可填写程序文件或其所在目录，留空使用系统 PATH 中的 llama-server。</p>
+        <label>GPU 版路径
+          <span class="pick"><input name="serverPathGpu" placeholder="留空则使用系统 PATH 中的 llama-server"><button type="button" data-pick="serverPathGpu">选择…</button></span>
         </label>
-        <div id="serverInfo" class="muted small"></div>
-        <button type="button" id="btnProbe">检测</button>
+        <div id="infoGpu" class="muted small probe"></div>
+        <label>CPU 版路径
+          <span class="pick"><input name="serverPathCpu" placeholder="可选；留空则 CPU 方式也使用 GPU 版"><button type="button" data-pick="serverPathCpu">选择…</button></span>
+        </label>
+        <div id="infoCpu" class="muted small probe"></div>
+        <button type="button" id="btnProbe">保存并检测</button>
       </fieldset>
       <fieldset>
-        <legend>模型目录（每行一个）</legend>
-        <textarea name="modelDirs" rows="4" placeholder="例如：D:\models 或 /data/models"></textarea>
+        <legend>模型目录</legend>
+        <div id="dirList" class="dir-list"></div>
+        <button type="button" id="btnAddDir">添加目录…</button>
+      </fieldset>
+      <fieldset id="gpuBox" hidden>
+        <legend>显卡信息 <span id="gpuTool" class="muted small"></span></legend>
+        <pre id="gpuOut" class="cmd gpu-out"></pre>
+        <button type="button" id="btnGpu">刷新</button>
+      </fieldset>
+      <fieldset>
+        <legend>网络</legend>
+        <div class="grid">
+          <label>代理地址<input name="proxy" placeholder="如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080"></label>
+          <label>HuggingFace 地址<input name="hfEndpoint" placeholder="https://huggingface.co 或 https://hf-mirror.com"></label>
+        </div>
+        <label class="inline" style="margin-top:8px"><input type="checkbox" name="proxyAll"> ModelScope 也使用代理（默认仅 HuggingFace 使用；代理留空时使用系统环境变量代理）</label>
       </fieldset>
       <fieldset>
         <legend>运行</legend>
@@ -65,7 +84,6 @@
         <div class="grid">
           <label>日志保留行数<input name="maxLogLines" type="number" min="100"></label>
           <label>自动分配端口起始值<input name="basePort" type="number" min="1"></label>
-          <label>HuggingFace 地址<input name="hfEndpoint" placeholder="https://huggingface.co 或 https://hf-mirror.com"></label>
         </div>
       </fieldset>
       <fieldset>
