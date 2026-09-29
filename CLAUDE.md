@@ -30,6 +30,7 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o d
 | `config.go` | `Params`（全部启动参数，指针=未设置）、`Config`、`LastRun`、`FlexStr`；`merge` 用 JSON 往返实现覆盖；`defaultParams()` 内置默认；`ConfigStore` 原子写文件 |
 | `models.go` | 扫描模型目录（两级）、分片合并、mmproj 识别；`BaseName`/`Quant` 量化后缀识别；`GroupModels` 分组 |
 | `process.go` | 日志环形缓冲 + 订阅；`argSpecs` 表驱动生成命令行；`BuildArgs`/`RunOpt`；`ServerBinary`/`CLIBinary`；实例管理（启动、就绪探测 `/health`、停止、端口分配）；`ProbeServer`（`--version`、`--list-devices`）；跨平台引号 `quoteCmd` |
+| `netpath.go` / `netpath_windows.go` / `netpath_other.go` | 共享目录：`parseNetLoc` 识别 `\\主机\共享`、`//`、`smb://`、`nfs://`、`主机:/路径`；`ResolveDir` 在 Windows 转 UNC，其它系统按挂载表（/proc/mounts、gvfs、macOS `mount`，缓存 5 秒）最长前缀匹配本地挂载点；`netRoots` 选择器网络位置；`withTimeout` 限时；Windows 用 `GetDriveTypeW` 识别网络驱动器、`NetShareEnum` 列共享 |
 | `proc_windows.go` / `proc_other.go` | `prepareCmd`：Windows 隐藏子进程控制台窗口 |
 | `terminal_windows.go` / `terminal_other.go` | `OpenTerminal`：Windows 优先 `wt.exe new-tab`，否则 `CREATE_NEW_CONSOLE` 的 PowerShell；macOS osascript 调用 Terminal；Linux 依次尝试常见终端；WSL 借助 wt.exe；Android 不支持 |
 | `sysinfo.go` | `SysMonitor` 后台约每 2 秒采样：CPU/内存/交换/温度、GPU（nvidia-smi → rocm-smi → amdgpu sysfs）、实例进程 RSS/CPU；保留 90 个历史点；`hostInfo` 静态主机信息；`nvidiaCUDA` 解析驱动支持的 CUDA 版本 |
@@ -43,6 +44,7 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o d
 
 ### 模型组
 - 扫描规则：`目录/*.gguf` 与 `目录/子目录/*.gguf`；文件名含 `mmproj` 的是视觉投影文件，不作为模型，挂到同目录模型上；`-00001-of-0000N.gguf` 分片合并为一项（大小累加）。
+- 目录先经 `ResolveDir` 解析（网络路径 → UNC / 挂载点）；各目录并行扫描，单目录限时 10 秒（`scanTimeout`），同目录并发请求共享一次扫描，超时后不重复发起；每次扫描的 `DirStatus`（实际路径、是否网络、模型数、错误）存于 `App.dirSt`。
 - 分组：子目录下的所有模型为一组（组名=子目录名）；根目录下按 `BaseName`（去量化/分片后缀）同名归组。单个模型的组显示完整文件名。
 - `Group.Key`：子目录绝对路径，或 `root|basename小写`；`Group.ID = sha1(Key)[:12]`。**参数、上次启动记录、实例 ID、介绍缓存都以组为单位**。
 
@@ -79,7 +81,8 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o d
 |---|---|
 | `GET/PUT /api/config` | 读取（含 defaults、os）/ 保存设置（保留 models、lastRun） |
 | `GET /api/server?refresh=1` | GPU/CPU 版程序探测结果与 `gpuOk` |
-| `GET /api/fs?path=&files=1` | 目录浏览（dirs、files、roots：Windows 盘符 / `/` / 用户目录） |
+| `GET /api/fs?path=&files=1` | 目录浏览（dirs、files、roots：本地盘符 / `/` / 用户目录，net：网络位置，volume：卷名；Windows 下 `\\主机` 列出共享） |
+| `GET /api/dirs?cached=1` | 模型目录状态（cached=1 取最近一次扫描结果，否则重新扫描） |
 | `GET /api/groups` | 模型组列表（含 hasParams、lastVariant） |
 | `GET/PUT /api/groups/{id}/params` | 组参数（GET 同时返回继承值 inherit） |
 | `GET /api/groups/{id}/run` | 启动框默认值（上次版本、运行方式、视觉、附加参数、gpuOk） |
@@ -116,10 +119,12 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o d
 3. **引导与体验**：模型介绍只找 GGUF 版本；有 GPU 时启动可选运行方式；llama-cli 可直接在终端运行（Windows 优先 Windows Terminal）；美化文件选择器；显卡信息只提取主要部分，与顶部状态合并为独立的系统状态页；新增引导页按系统/显卡推荐下载 llama.cpp release；`-ngl` 参考配置（显存充裕 999，紧张用 auto + `-fit on` + `--fit-target`）；参照 server README 完善参数。
 4. **细节修正**：系统状态曲线显示异常（改为服务端历史 + 网格 + 按实际时间铺满）；为每个参数补充作用说明。
 5. **归档与改名**：项目更名为 llamaRuns，新增本归档文档。
+6. **共享目录**：模型目录支持 SMB / NFS 等共享路径（Windows UNC 与网络驱动器；Linux/macOS 匹配已挂载位置）；扫描限时并在设置页 / 模型页提示不可用目录；选择器显示网络位置、可浏览服务器共享。
 
 ## 已知限制
 
 - 温度：Windows 通常需管理员权限；macOS 纯 Go 构建取不到 CPU 温度与 GPU 占用；Windows 的“交换”显示的是提交内存。
 - AMD 显卡监控仅 Linux（rocm-smi / sysfs）；Windows AMD 无监控数据。
 - 在终端运行 llama-cli 只在面板所在机器上生效；Android 不支持。
+- Linux/macOS 不会自动挂载共享（需要凭据与 root 权限），只匹配已挂载的；主机名与挂载时写法（IP / 域名）不同则匹配不到，需直接填挂载点。
 - Windows 生成的命令为 PowerShell 格式（`& "路径" ...`），cmd 中需去掉开头的 `& `。

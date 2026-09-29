@@ -19,7 +19,7 @@ go build -o llamaRuns .      # 或 ./build.sh 交叉编译全部平台到 dist/
 
 - **引导页**：检测系统、架构与显卡（NVIDIA/AMD/Intel/Adreno/Apple），读取驱动支持的 CUDA 版本，从 [llama.cpp Releases](https://github.com/ggml-org/llama.cpp/releases) 最新版本中推荐对应的 GPU 版与 CPU 版下载包（CUDA 版附带 cudart 运行库），并引导完成程序路径与模型目录配置。首次使用自动打开。
 - **llama-server 路径**：CPU 版与 GPU 版分别配置（文件或所在目录，页面内浏览选择）。GPU 方式用 GPU 版；CPU 方式用 CPU 版，未配置时用 GPU 版加 `-ngl 0 --device none`。GPU 版留空则使用 PATH。无可用 GPU 时强制 CPU 运行。
-- **模型目录**：可添加多个，识别 `目录/模型.gguf` 与 `目录/子目录/模型.gguf`；同一子目录或同名不同量化的模型归为一组折叠展示，分片模型合并为一项。
+- **模型目录**：可添加多个，识别 `目录/模型.gguf` 与 `目录/子目录/模型.gguf`；同一子目录或同名不同量化的模型归为一组折叠展示，分片模型合并为一项。支持共享目录：Windows 直接填 `\\主机\共享\目录` 或映射的网络驱动器（选择器输入 `\\主机` 可列出共享）；Linux/macOS 先挂载 SMB/NFS，可填挂载点，或填 `smb://主机/共享`、`nfs://主机/导出路径`、`主机:/导出路径` 自动匹配已挂载位置。网络目录读取限时 10 秒，不可用时在设置页与模型页提示。
 - **启动**：可选择版本（默认上次运行的）、运行方式（有 GPU 时可选 GPU/CPU）、是否启用视觉（`mmproj*.gguf`），选择会被记住。
 - **llama-cli**：生成完整命令一键复制，或直接在新终端中运行（Windows 优先 Windows Terminal，否则新 PowerShell 窗口；macOS 用“终端”；Linux 自动识别常见终端）。
 - **参数**：按 GPU 与显存 / 上下文与性能 / 采样 / 模板与推理 / 服务 分区，覆盖 `-ngl`、`-fit`、`-fitt`、`-sm`、`-ts`、`-ncmoe`、`-nkvo`、`-ctk/-ctv`、`-cram`、`-rea`、`--reasoning-budget` 等常用参数；优先级 模型参数 → 全局参数 → 内置默认（`-ngl auto`，新版默认 `-fit on`）。显存充裕时可设 `-ngl 999` 以获得确定、可复现的全层卸载。

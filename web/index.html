@@ -40,6 +40,7 @@
       <button id="btnRefreshModels">刷新列表</button>
       <span id="modelHint" class="muted"></span>
     </div>
+    <div id="dirWarn" class="dir-warn"></div>
     <div id="modelList" class="list"></div>
   </section>
 
@@ -78,6 +79,8 @@
         <legend>模型目录</legend>
         <div id="dirList" class="dir-list"></div>
         <button type="button" id="btnAddDir">添加目录…</button>
+        <div class="muted small" style="margin-top:6px">支持共享目录：Windows 填 <code>\\主机\共享\目录</code>（或映射的网络驱动器，选择器中输入 <code>\\主机</code> 可列出共享）；
+          Linux / macOS 需先挂载 SMB / NFS，可直接填挂载点，或填 <code>smb://主机/共享</code>、<code>nfs://主机/导出路径</code>、<code>主机:/导出路径</code> 自动匹配已挂载的位置。网络目录读取超过 10 秒会跳过。</div>
       </fieldset>
       <fieldset>
         <legend>网络</legend>

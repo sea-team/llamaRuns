@@ -161,3 +161,52 @@ func TestPickCUDAFallback(t *testing.T) {
 		t.Errorf("match: %s %v", ver, ok)
 	}
 }
+
+func TestNetPath(t *testing.T) {
+	cases := []struct {
+		in   string
+		ok   bool
+		want netLoc
+	}{
+		{`\\NAS\Models\qwen`, true, netLoc{"nas", "/Models/qwen", true}},
+		{"//nas/models/", true, netLoc{"nas", "/models", true}},
+		{"smb://user@nas.local/share", true, netLoc{"nas.local", "/share", true}},
+		{"nfs://10.0.0.2/export/llm", true, netLoc{"10.0.0.2", "/export/llm", false}},
+		{"nas:/export/llm", true, netLoc{"nas", "/export/llm", false}},
+		{`C:\models`, false, netLoc{}},
+		{"C:/models", false, netLoc{}},
+		{"/home/a/models", false, netLoc{}},
+	}
+	for _, c := range cases {
+		got, ok := parseNetLoc(c.in)
+		if ok != c.ok || got != c.want {
+			t.Errorf("parseNetLoc(%q) = %+v,%v, want %+v,%v", c.in, got, ok, c.want, c.ok)
+		}
+	}
+
+	mounts := []mountInfo{
+		{netLoc{"nas", "/Models", true}, "/mnt/nas"},
+		{netLoc{"nas", "/Models/big", true}, "/mnt/big"},
+		{netLoc{"srv", "/export", false}, "/mnt/srv"},
+	}
+	for in, want := range map[string]string{
+		"smb://NAS/models/qwen": "/mnt/nas/qwen",
+		`\\nas\Models\big\x`:    "/mnt/big/x",
+		"srv:/export/llm":       "/mnt/srv/llm",
+		"nfs://srv/export":      "/mnt/srv",
+		"nfs://srv/exports/llm": "",
+		"smb://other/models":    "",
+	} {
+		loc, _ := parseNetLoc(in)
+		if got := findMount(loc, mounts); got != want {
+			t.Errorf("findMount(%q) = %q, want %q", in, got, want)
+		}
+	}
+
+	if m, ok := gvfsEntry("/run/user/1000/gvfs", "smb-share:server=nas,share=models"); !ok || m.Loc != (netLoc{"nas", "/models", true}) {
+		t.Errorf("gvfsEntry = %+v,%v", m, ok)
+	}
+	if got := unescapeMount(`/mnt/my\040share`); got != "/mnt/my share" {
+		t.Errorf("unescapeMount = %q", got)
+	}
+}

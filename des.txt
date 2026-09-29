@@ -43,3 +43,6 @@ llama-cli方式也可直接运行，点击运行则自动打开终端，如果�
 显存充裕（比如 24GB 及以上跑 7B/8B）：直接 999，行为确定、可复现，方便你调参时对比。全层卸载推理速度最快、延迟最低，适合显存充足的场景。
 显存紧张或多模型混跑：用 -ngl auto -fit on，让系统自动适配显存，并可用 --fit-target 设定每设备目标剩余显存（默认 1024 MiB）。”
 参考 https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md 这里的完善运行参数配置
+
+
+模型目录: 增加共享目录(SMB、NFS等)的模型路径支持

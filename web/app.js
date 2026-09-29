@@ -303,17 +303,26 @@ function pickPath(title, start, mode) {
         $('#pkUp', body).onclick = () => load(data.parent);
         // 面包屑
         const parts = [];
-        let acc = '';
-        const segs = cur.split(data.sep).filter((x, i) => x || i === 0);
-        segs.forEach((seg, i) => {
-          acc = i === 0 ? (seg === '' ? data.sep : seg + data.sep) : (acc.endsWith(data.sep) ? acc : acc + data.sep) + seg;
-          parts.push(`<button type="button" data-p="${esc(acc)}">${esc(seg || data.sep)}</button>`);
+        // 首段为卷名（C: 或 \\主机\共享），网络共享再加一段服务器
+        const vol = data.volume || '';
+        let acc = vol + data.sep;
+        if (vol.startsWith('\\\\')) {
+          const host = vol.split('\\').slice(0, 3).join('\\');
+          parts.push(`<button type="button" data-p="${esc(host)}">🌐 ${esc(host)}</button>`);
+          if (vol !== host) parts.push(`<button type="button" data-p="${esc(acc)}">${esc(baseName(vol))}</button>`);
+        } else {
+          parts.push(`<button type="button" data-p="${esc(acc)}">${esc(vol || data.sep)}</button>`);
+        }
+        cur.slice(vol.length).split(data.sep).filter(Boolean).forEach(seg => {
+          acc = (acc.endsWith(data.sep) ? acc : acc + data.sep) + seg;
+          parts.push(`<button type="button" data-p="${esc(acc)}">${esc(seg)}</button>`);
         });
         $('#pkCrumbs', body).innerHTML = parts.join('<span class="sep">›</span>');
         // 侧栏：位置与最近使用
         const recent = JSON.parse(lsGet(RECENT_KEY) || '[]');
         $('#pkSide', body).innerHTML = '<div class="lbl">位置</div>' +
           (data.roots || []).map(x => `<button type="button" data-p="${esc(x)}" title="${esc(x)}" class="${cur === x ? 'on' : ''}">${x.length <= 3 ? '💽' : '🏠'} ${esc(x)}</button>`).join('') +
+          (data.net?.length ? '<div class="lbl">网络位置</div>' + data.net.map(x => `<button type="button" data-p="${esc(x)}" title="${esc(x)}" class="${cur === x ? 'on' : ''}">🌐 ${esc(x.length <= 3 ? x : baseName(x) || x)}</button>`).join('') : '') +
           (recent.length ? '<div class="lbl">最近使用</div>' + recent.map(x => `<button type="button" data-p="${esc(x)}" title="${esc(x)}">🕘 ${esc(baseName(x) || x)}</button>`).join('') : '');
         render();
         // 当前目录包含 llama-server 时自动选中
@@ -446,6 +455,11 @@ $('#miniStat').onclick = () => { switchTab('system'); refreshStats(); };
 async function loadModels() {
   try { state.groups = await api('/api/groups'); } catch (e) { toast(e.message, true); }
   renderModels();
+  // 提示无法访问的目录（如网络共享掉线），使用刚才扫描的结果
+  try {
+    const bad = (await api('/api/dirs?cached=1')).filter(x => x.error);
+    $('#dirWarn').innerHTML = bad.map(x => `<div>⚠ ${esc(x.dir)}：${esc(x.error)}</div>`).join('');
+  } catch { /* 忽略 */ }
 }
 function groupInst(g) {
   const i = state.instances.find(x => x.id === g.id);
@@ -816,14 +830,29 @@ $('#wrapLog').onchange = e => $('#logView').classList.toggle('wrap', e.target.ch
 
 // ---------- 设置 ----------
 function renderDirs(dirs) {
-  $('#dirList').innerHTML = dirs.map(d => `<div class="dir-row"><input value="${esc(d)}" data-dir><button type="button" data-pickdir>选择…</button><button type="button" class="danger" data-deldir>删除</button></div>`).join('') ||
+  $('#dirList').innerHTML = dirs.map(d => `<div class="dir-item"><div class="dir-row"><input value="${esc(d)}" data-dir spellcheck="false"><button type="button" data-pickdir>选择…</button><button type="button" class="danger" data-deldir>删除</button></div><div class="dir-st small" data-st></div></div>`).join('') ||
     '<div class="muted small">尚未添加模型目录</div>';
+  if (dirs.length) loadDirStatus();
+}
+// 目录状态：模型数量、网络目录的实际路径、不可访问的原因
+async function loadDirStatus(cached) {
+  let sts;
+  try { sts = await api('/api/dirs' + (cached ? '?cached=1' : '')); } catch { return; }
+  document.querySelectorAll('#dirList .dir-item').forEach(el => {
+    const st = sts.find(x => x.dir === el.querySelector('[data-dir]').value.trim());
+    const box = el.querySelector('[data-st]');
+    if (!st) { box.textContent = ''; return; }
+    const via = st.path && st.path !== st.dir ? ` · 实际路径 ${esc(st.path)}` : '';
+    box.innerHTML = (st.net ? '🌐 网络目录 · ' : '') +
+      (st.error ? `<span class="hot">${esc(st.error)}</span>` : `<span class="muted">${st.count} 个模型文件${via}</span>`);
+  });
+  return sts;
 }
 function currentDirs() {
   return [...document.querySelectorAll('#dirList [data-dir]')].map(i => i.value.trim()).filter(Boolean);
 }
 $('#dirList').onclick = async e => {
-  const row = e.target.closest('.dir-row');
+  const row = e.target.closest('.dir-item');
   if (!row) return;
   if (e.target.matches('[data-deldir]')) { row.remove(); if (!currentDirs().length) renderDirs([]); }
   if (e.target.matches('[data-pickdir]')) {

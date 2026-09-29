@@ -91,6 +91,10 @@ pre.cmd { background: var(--log-bg); color: var(--log-fg); padding: 8px; border-
 .dir-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
 .dir-row { display: flex; gap: 6px; }
 .dir-row input { flex: 1; }
+.dir-st { margin: 2px 0 0 2px; }
+.dir-st:empty { display: none; }
+.dir-warn { color: var(--err); font-size: 13px; margin: 0 0 8px; }
+.dir-warn:empty { display: none; }
 details.group > summary { list-style: none; cursor: pointer; }
 details.group > summary::-webkit-details-marker { display: none; }
 details.group > summary .arrow { display: inline-block; transition: transform .2s; margin-right: 4px; color: var(--muted); }

@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -27,6 +28,8 @@ type App struct {
 
 	siMu  sync.Mutex
 	probe map[string]ServerInfo // 配置路径 -> 探测结果
+
+	dirSt atomic.Pointer[[]DirStatus] // 最近一次扫描的目录状态
 }
 
 func (a *App) probeCached(path string, refresh bool) ServerInfo {
@@ -62,7 +65,9 @@ func (a *App) servers(refresh bool) ServersInfo {
 }
 
 func (a *App) groups() []Group {
-	return GroupModels(ScanModels(a.cfg.Get().ModelDirs))
+	ms, sts := ScanModels(a.cfg.Get().ModelDirs)
+	a.dirSt.Store(&sts)
+	return GroupModels(ms)
 }
 
 func (a *App) findGroup(id string) (Group, bool) {
@@ -212,6 +217,19 @@ func (a *App) Routes() http.Handler {
 			return
 		}
 		writeJSON(w, res)
+	})
+	mux.HandleFunc("GET /api/dirs", func(w http.ResponseWriter, r *http.Request) {
+		var sts []DirStatus
+		if p := a.dirSt.Load(); p != nil && r.URL.Query().Get("cached") == "1" {
+			sts = *p
+		} else {
+			_, sts = ScanModels(a.cfg.Get().ModelDirs)
+			a.dirSt.Store(&sts)
+		}
+		if sts == nil {
+			sts = []DirStatus{}
+		}
+		writeJSON(w, sts)
 	})
 	mux.HandleFunc("GET /api/groups", func(w http.ResponseWriter, r *http.Request) {
 		cfg := a.cfg.Get()
@@ -372,6 +390,8 @@ type FSList struct {
 	Dirs   []string `json:"dirs"`
 	Files  []string `json:"files"`
 	Roots  []string `json:"roots"`
+	Net    []string `json:"net"`    // 网络位置（映射的网络驱动器 / 已挂载的共享）
+	Volume string   `json:"volume"` // 卷名：C: 或 \\主机\共享，其它系统为空
 }
 
 func listDir(path string, files bool) (*FSList, error) {
@@ -382,21 +402,50 @@ func listDir(path string, files bool) (*FSList, error) {
 			path, _ = os.Getwd()
 		}
 	}
-	abs, err := filepath.Abs(path)
+	abs, err := ResolveDir(path)
 	if err != nil {
 		return nil, err
 	}
-	// 选中的是文件时展示其所在目录
-	if st, err := os.Stat(abs); err == nil && !st.IsDir() {
-		abs = filepath.Dir(abs)
+	// Windows 下 \\主机 列出其共享目录
+	if runtime.GOOS == "windows" {
+		if loc, ok := parseNetLoc(abs); ok && loc.Path == "/" {
+			host := `\\` + loc.Host
+			shares, err := withTimeout(scanTimeout, func() ([]string, error) { return listShares(loc.Host) })
+			if err != nil {
+				return nil, fmt.Errorf("无法列出 %s 的共享：%v", host, err)
+			}
+			res := &FSList{Path: host, Sep: `\`, Dirs: shares, Files: []string{}, Volume: host}
+			if res.Dirs == nil {
+				res.Dirs = []string{}
+			}
+			sort.Slice(res.Dirs, func(i, j int) bool { return strings.ToLower(res.Dirs[i]) < strings.ToLower(res.Dirs[j]) })
+			fillRoots(res)
+			return res, nil
+		}
 	}
-	entries, err := os.ReadDir(abs)
+	// 网络目录可能无响应，限时读取
+	type dirRead struct {
+		abs     string
+		entries []os.DirEntry
+	}
+	rd, err := withTimeout(scanTimeout, func() (dirRead, error) {
+		a := abs
+		// 选中的是文件时展示其所在目录
+		if st, err := os.Stat(a); err == nil && !st.IsDir() {
+			a = filepath.Dir(a)
+		}
+		es, err := os.ReadDir(a)
+		return dirRead{a, es}, err
+	})
 	if err != nil {
 		return nil, fmt.Errorf("无法读取目录：%v", err)
 	}
-	res := &FSList{Path: abs, Sep: string(os.PathSeparator), Dirs: []string{}, Files: []string{}}
+	abs, entries := rd.abs, rd.entries
+	res := &FSList{Path: abs, Sep: string(os.PathSeparator), Dirs: []string{}, Files: []string{}, Volume: filepath.VolumeName(abs)}
 	if p := filepath.Dir(abs); p != abs {
 		res.Parent = p
+	} else if loc, ok := parseNetLoc(abs); ok && runtime.GOOS == "windows" {
+		res.Parent = `\\` + loc.Host // 共享根目录的上级是服务器
 	}
 	for _, e := range entries {
 		isDir := e.IsDir()
@@ -413,9 +462,19 @@ func listDir(path string, files bool) (*FSList, error) {
 	}
 	sort.Slice(res.Dirs, func(i, j int) bool { return strings.ToLower(res.Dirs[i]) < strings.ToLower(res.Dirs[j]) })
 	sort.Slice(res.Files, func(i, j int) bool { return strings.ToLower(res.Files[i]) < strings.ToLower(res.Files[j]) })
+	fillRoots(res)
+	return res, nil
+}
+
+// fillRoots 填充选择器侧栏的位置：本地盘符 / 根目录、用户目录、网络位置。
+func fillRoots(res *FSList) {
+	res.Net = netRoots()
 	if runtime.GOOS == "windows" {
 		for c := 'A'; c <= 'Z'; c++ {
 			d := string(c) + `:\`
+			if isRemoteDrive(d[:2]) {
+				continue
+			}
 			if _, err := os.Stat(d); err == nil {
 				res.Roots = append(res.Roots, d)
 			}
@@ -426,7 +485,6 @@ func listDir(path string, files bool) (*FSList, error) {
 	if h, err := os.UserHomeDir(); err == nil {
 		res.Roots = append(res.Roots, h)
 	}
-	return res, nil
 }
 
 // handleLogs 以 SSE 推送实例日志：先发送缓冲区中的历史，再实时推送。
