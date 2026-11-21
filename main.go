@@ -34,6 +34,7 @@ func main() {
 		mgr:  mgr,
 		mon:  NewSysMonitor(mgr),
 		info: &InfoFetcher{cacheDir: filepath.Join(cfg.Dir(), "cache", "info"), cfg: cfg},
+		upd:  &Updater{},
 	}
 
 	sig := make(chan os.Signal, 1)

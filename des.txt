@@ -46,3 +46,6 @@ llama-cli方式也可直接运行，点击运行则自动打开终端，如果�
 
 
 模型目录: 增加共享目录(SMB、NFS等)的模型路径支持
+
+
+增加更新检测处理 https://github.com/ggml-org/llama.cpp/releases，打开页面执行一次检测或手动按钮检测，检测到有新版本时，可自动更新替换程序运行。针对 github.com 访问可以配置代理。

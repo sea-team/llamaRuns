@@ -25,6 +25,7 @@ type App struct {
 	mgr  *Manager
 	mon  *SysMonitor
 	info *InfoFetcher
+	upd  *Updater
 
 	siMu  sync.Mutex
 	probe map[string]ServerInfo // 配置路径 -> 探测结果
@@ -374,6 +375,30 @@ func (a *App) Routes() http.Handler {
 	})
 	mux.HandleFunc("GET /api/host", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, hostInfo())
+	})
+	mux.HandleFunc("GET /api/update", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, a.checkUpdate(r.URL.Query().Get("refresh") == "1"))
+	})
+	mux.HandleFunc("POST /api/update", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Targets []string          `json:"targets"`
+			Assets  map[string]string `json:"assets"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErr(w, 400, err)
+			return
+		}
+		if err := a.StartUpdate(req.Targets, req.Assets); err != nil {
+			writeErr(w, 400, err)
+			return
+		}
+		writeJSON(w, a.upd.Status())
+	})
+	mux.HandleFunc("GET /api/update/status", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, a.upd.Status())
+	})
+	mux.HandleFunc("POST /api/update/cancel", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{"ok": a.upd.Cancel()})
 	})
 	mux.HandleFunc("GET /api/guide", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, a.guide(r.URL.Query().Get("refresh") == "1"))

@@ -78,6 +78,9 @@ type Config struct {
 	ServerPathCPU   string             `json:"serverPathCpu"`             // CPU 版，为空时使用 GPU 版并禁用 GPU
 	Proxy           string             `json:"proxy"`                     // http://、https:// 或 socks5:// 代理
 	ProxyAll        bool               `json:"proxyAll"`                  // false：仅 HuggingFace 走代理
+	GitHubProxy     string             `json:"githubProxy"`               // 访问 GitHub 的代理，为空时使用 Proxy
+	AutoUpdate      bool               `json:"autoUpdate"`                // 检测到 llama.cpp 新版本时自动更新
+	Installed       map[string]string  `json:"installed"`                 // 程序目录 -> 通过更新安装的发布包（去掉构建号）
 	LastRun         map[string]LastRun `json:"lastRun"`
 	ModelDirs       []string           `json:"modelDirs"`
 	AllowMulti      bool               `json:"allowMulti"`  // 是否允许同时运行多个模型
@@ -175,6 +178,9 @@ func (s *ConfigStore) normalize() {
 	if s.cfg.LastRun == nil {
 		s.cfg.LastRun = map[string]LastRun{}
 	}
+	if s.cfg.Installed == nil {
+		s.cfg.Installed = map[string]string{}
+	}
 	if s.cfg.LlamaServerPath != "" && s.cfg.ServerPathGPU == "" {
 		s.cfg.ServerPathGPU = s.cfg.LlamaServerPath
 	}
@@ -209,16 +215,20 @@ func (s *ConfigStore) Get() Config {
 	for k, v := range s.cfg.LastRun {
 		c.LastRun[k] = v
 	}
+	c.Installed = make(map[string]string, len(s.cfg.Installed))
+	for k, v := range s.cfg.Installed {
+		c.Installed[k] = v
+	}
 	return c
 }
 
-// UpdateSettings 更新除模型参数以外的配置。
+// UpdateSettings 更新除模型参数、启动记录、安装记录以外的配置。
 func (s *ConfigStore) UpdateSettings(c Config) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	models, last := s.cfg.Models, s.cfg.LastRun
+	models, last, inst := s.cfg.Models, s.cfg.LastRun, s.cfg.Installed
 	s.cfg = c
-	s.cfg.Models, s.cfg.LastRun = models, last
+	s.cfg.Models, s.cfg.LastRun, s.cfg.Installed = models, last, inst
 	s.normalize()
 	return s.save()
 }
@@ -238,6 +248,14 @@ func (s *ConfigStore) SetLastRun(key string, l LastRun) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cfg.LastRun[key] = l
+	return s.save()
+}
+
+// SetInstalled 记录程序目录通过更新安装的发布包，下次更新时优先选择同一种包。
+func (s *ConfigStore) SetInstalled(dir, family string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cfg.Installed[dir] = family
 	return s.save()
 }
 

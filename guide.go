@@ -98,9 +98,10 @@ func vendorOf(name string) string {
 // ---------- GitHub release ----------
 
 type ReleaseAsset struct {
-	Name string `json:"name"`
-	URL  string `json:"url"`
-	Size int64  `json:"size"`
+	Name   string `json:"name"`
+	URL    string `json:"url"`
+	Size   int64  `json:"size"`
+	Digest string `json:"digest,omitempty"` // 如 sha256:…，用于校验下载
 }
 
 type Release struct {
@@ -124,7 +125,7 @@ func (a *App) latestRelease(refresh bool) (*Release, error) {
 	if !refresh && relCache.rel != nil && time.Since(relCache.at) < 30*time.Minute {
 		return relCache.rel, nil
 	}
-	body, err := a.info.get(true, "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=5")
+	body, err := a.info.get(netGitHub, "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=5")
 	if err != nil {
 		return nil, fmt.Errorf("获取 GitHub 发布信息失败：%v（可在设置中配置代理）", err)
 	}
@@ -133,9 +134,10 @@ func (a *App) latestRelease(refresh bool) (*Release, error) {
 		URL       string    `json:"html_url"`
 		Published time.Time `json:"published_at"`
 		Assets    []struct {
-			Name string `json:"name"`
-			URL  string `json:"browser_download_url"`
-			Size int64  `json:"size"`
+			Name   string `json:"name"`
+			URL    string `json:"browser_download_url"`
+			Size   int64  `json:"size"`
+			Digest string `json:"digest"`
 		} `json:"assets"`
 	}
 	if err := json.Unmarshal([]byte(body), &list); err != nil {
@@ -147,7 +149,7 @@ func (a *App) latestRelease(refresh bool) (*Release, error) {
 		}
 		rel := &Release{Tag: r.Tag, URL: r.URL, Published: r.Published}
 		for _, as := range r.Assets {
-			rel.Assets = append(rel.Assets, ReleaseAsset{as.Name, as.URL, as.Size})
+			rel.Assets = append(rel.Assets, ReleaseAsset{as.Name, as.URL, as.Size, as.Digest})
 		}
 		relCache.rel, relCache.at = rel, time.Now()
 		return rel, nil

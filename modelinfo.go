@@ -100,22 +100,50 @@ type InfoFetcher struct {
 	clients map[string]*http.Client
 }
 
-// client 返回 HTTP 客户端：配置了代理且（访问 HF 或设置为全部走代理）时使用代理，否则使用系统环境代理。
-func (f *InfoFetcher) client(hf bool) (*http.Client, error) {
-	cfg := f.cfg.Get()
+// netKind 表示访问的站点类别，用于选择代理。
+type netKind int
+
+const (
+	netHF     netKind = iota // HuggingFace
+	netMS                    // ModelScope 等其它站点
+	netGitHub                // GitHub（发布信息与下载）
+)
+
+// proxyFor 返回访问该类站点使用的代理：GitHub 优先使用 GitHub 代理，未配置时使用通用代理；
+// HuggingFace 使用通用代理；其它站点仅在“全部走代理”时使用。空表示使用系统环境变量代理。
+func proxyFor(cfg Config, kind netKind) string {
 	proxy := strings.TrimSpace(cfg.Proxy)
-	if !hf && !cfg.ProxyAll {
-		proxy = ""
+	switch kind {
+	case netGitHub:
+		if gp := strings.TrimSpace(cfg.GitHubProxy); gp != "" {
+			return gp
+		}
+	case netMS:
+		if !cfg.ProxyAll {
+			return ""
+		}
 	}
+	return proxy
+}
+
+// client 返回访问该类站点的 HTTP 客户端（按代理地址缓存）。
+func (f *InfoFetcher) client(kind netKind) (*http.Client, error) {
+	return f.clientWith(proxyFor(f.cfg.Get(), kind), 20*time.Second)
+}
+
+// clientWith 按代理地址与总超时返回 HTTP 客户端；timeout 为 0 表示不限总时长（用于大文件下载）。
+func (f *InfoFetcher) clientWith(proxy string, timeout time.Duration) (*http.Client, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.clients == nil {
 		f.clients = map[string]*http.Client{}
 	}
-	if c := f.clients[proxy]; c != nil {
+	key := proxy + "|" + timeout.String()
+	if c := f.clients[key]; c != nil {
 		return c, nil
 	}
 	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.ResponseHeaderTimeout = 30 * time.Second
 	if proxy != "" {
 		u, err := url.Parse(proxy)
 		if err != nil || u.Host == "" {
@@ -123,8 +151,8 @@ func (f *InfoFetcher) client(hf bool) (*http.Client, error) {
 		}
 		tr.Proxy = http.ProxyURL(u)
 	}
-	c := &http.Client{Timeout: 20 * time.Second, Transport: tr}
-	f.clients[proxy] = c
+	c := &http.Client{Timeout: timeout, Transport: tr}
+	f.clients[key] = c
 	return c, nil
 }
 
@@ -208,13 +236,13 @@ func (f *InfoFetcher) repoURL(src, repo string) string {
 
 func (f *InfoFetcher) repoFile(src, repo, file string) (string, error) {
 	if src == "ms" {
-		return f.get(false, "https://www.modelscope.cn/api/v1/models/"+repo+"/repo?Revision=master&FilePath="+url.QueryEscape(file))
+		return f.get(netMS, "https://www.modelscope.cn/api/v1/models/"+repo+"/repo?Revision=master&FilePath="+url.QueryEscape(file))
 	}
-	return f.get(true, f.hfBase()+"/"+repo+"/raw/main/"+file)
+	return f.get(netHF, f.hfBase()+"/"+repo+"/raw/main/"+file)
 }
 
-func (f *InfoFetcher) get(hf bool, u string) (string, error) {
-	c, err := f.client(hf)
+func (f *InfoFetcher) get(kind netKind, u string) (string, error) {
+	c, err := f.client(kind)
 	if err != nil {
 		return "", err
 	}
@@ -238,7 +266,7 @@ func (f *InfoFetcher) searchHF(kw string, gguf bool) ([]Candidate, error) {
 	if gguf {
 		u += "&filter=gguf"
 	}
-	body, err := f.get(true, u)
+	body, err := f.get(netHF, u)
 	if err != nil {
 		return nil, fmt.Errorf("HuggingFace 搜索失败：%v（可在设置中配置代理或镜像地址）", err)
 	}
@@ -257,7 +285,7 @@ func (f *InfoFetcher) searchHF(kw string, gguf bool) ([]Candidate, error) {
 }
 
 func (f *InfoFetcher) searchMS(kw string, gguf bool) ([]Candidate, error) {
-	c, err := f.client(false)
+	c, err := f.client(netMS)
 	if err != nil {
 		return nil, err
 	}

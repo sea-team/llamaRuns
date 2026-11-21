@@ -19,6 +19,8 @@
   <div id="miniStat" class="mini-stat" title="点击查看系统状态"></div>
 </header>
 
+<div id="updBar" class="upd-bar" hidden></div>
+
 <main>
   <!-- 引导 -->
   <section id="tab-guide" class="tab">
@@ -76,6 +78,19 @@
         <button type="button" id="btnProbe">保存并检测</button>
       </fieldset>
       <fieldset>
+        <legend>llama.cpp 更新</legend>
+        <p class="muted small">打开页面时会检测一次 <a href="https://github.com/ggml-org/llama.cpp/releases" target="_blank" rel="noopener">GitHub 发布</a>，也可手动检测。更新会按当前程序目录中的文件识别包类型（CPU / CUDA / Vulkan / ROCm 等），下载并校验后替换程序目录中的文件；替换时会停止使用该程序的实例，完成后自动重新启动。新版本无法运行时自动还原。程序来自系统 PATH 时不会自动更新。</p>
+        <label class="inline"><input type="checkbox" name="autoUpdate"> 检测到新版本时自动更新（运行中的模型会被重启）</label>
+        <div id="updTargets" class="upd-targets"></div>
+        <div class="upd-ops">
+          <button type="button" id="btnCheckUpd">检测更新</button>
+          <button type="button" id="btnDoUpd" class="primary" disabled>更新所选</button>
+          <button type="button" id="btnCancelUpd" hidden>取消</button>
+          <span id="updInfo" class="muted small"></span>
+        </div>
+        <div id="updTask" class="upd-task" hidden></div>
+      </fieldset>
+      <fieldset>
         <legend>模型目录</legend>
         <div id="dirList" class="dir-list"></div>
         <button type="button" id="btnAddDir">添加目录…</button>
@@ -88,7 +103,8 @@
           <label>代理地址<input name="proxy" placeholder="如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080"></label>
           <label>HuggingFace 地址<input name="hfEndpoint" placeholder="https://huggingface.co 或 https://hf-mirror.com"></label>
         </div>
-        <label class="inline" style="margin-top:8px"><input type="checkbox" name="proxyAll"> ModelScope 也使用代理（默认仅 HuggingFace 使用；代理留空时使用系统环境变量代理）</label>
+        <label style="margin-top:8px">GitHub 代理<input name="githubProxy" placeholder="留空则使用上面的代理地址；用于检测更新、下载 llama.cpp 发布包"></label>
+        <label class="inline" style="margin-top:8px"><input type="checkbox" name="proxyAll"> ModelScope 也使用代理（默认仅 HuggingFace 与 GitHub 使用；代理留空时使用系统环境变量代理）</label>
       </fieldset>
       <fieldset>
         <legend>运行</legend>

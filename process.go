@@ -88,9 +88,18 @@ type Instance struct {
 	StartedAt time.Time `json:"startedAt"`
 	ExitMsg   string    `json:"exitMsg"`
 
-	cmd  *exec.Cmd
-	logs *LogBuffer
-	done chan struct{}
+	cmd    *exec.Cmd
+	logs   *LogBuffer
+	done   chan struct{}
+	launch launchSpec // 启动时的完整参数，用于更新程序后重新启动
+}
+
+type launchSpec struct {
+	g     Group
+	model Model
+	p     Params
+	o     RunOpt
+	bin   string
 }
 
 type Manager struct {
@@ -397,6 +406,7 @@ func (m *Manager) Start(g Group, model Model, p Params, o RunOpt, bin string) (*
 		Mode: runMode(p, o), Vision: o.Mmproj != "",
 		Args: args, Status: "loading", StartedAt: time.Now(),
 		logs: NewLogBuffer(cfg.MaxLogLines), done: make(chan struct{}),
+		launch: launchSpec{g, model, p, o, bin},
 	}
 	in.logs.Add("$ " + quoteCmd(bin, args))
 	cmd := exec.Command(bin, args...)
@@ -548,6 +558,46 @@ func (m *Manager) StopAll(except string) {
 		go func(id string) { defer wg.Done(); _ = m.Stop(id) }(id)
 	}
 	wg.Wait()
+}
+
+// StopByDir 停止所有使用 dir 目录中程序的实例，返回停止前的启动参数（用于之后重新启动）。
+func (m *Manager) StopByDir(dir string) []launchSpec {
+	m.mu.Lock()
+	var ids []string
+	var specs []launchSpec
+	for _, id := range m.order {
+		in := m.instances[id]
+		if in.alive() && sameDir(filepath.Dir(in.launch.bin), dir) {
+			ids = append(ids, id)
+			sp := in.launch
+			sp.p.Port = ptr(in.Port) // 重启后保持原端口
+			specs = append(specs, sp)
+		}
+	}
+	m.mu.Unlock()
+	for _, id := range ids {
+		_ = m.Stop(id)
+	}
+	return specs
+}
+
+// Relaunch 按记录的启动参数重新启动实例。
+func (m *Manager) Relaunch(sp launchSpec) (*Instance, error) {
+	return m.Start(sp.g, sp.model, sp.p, sp.o, sp.bin)
+}
+
+// sameDir 比较两个目录是否相同（Windows / macOS 不区分大小写）。
+func sameDir(a, b string) bool {
+	if x, err := filepath.Abs(a); err == nil {
+		a = x
+	}
+	if x, err := filepath.Abs(b); err == nil {
+		b = x
+	}
+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
 }
 
 func (m *Manager) Remove(id string) error {

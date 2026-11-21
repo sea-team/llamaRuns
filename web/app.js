@@ -889,6 +889,8 @@ async function loadConfig() {
   f.hfEndpoint.value = d.config.hfEndpoint || '';
   f.proxy.value = d.config.proxy || '';
   f.proxyAll.checked = !!d.config.proxyAll;
+  f.githubProxy.value = d.config.githubProxy || '';
+  f.autoUpdate.checked = !!d.config.autoUpdate;
   renderFields($('#globalParams'), d.config.global || {}, d.defaults, false);
 }
 function probeHTML(s) {
@@ -926,6 +928,8 @@ async function saveSettings(silent) {
     hfEndpoint: f.hfEndpoint.value.trim(),
     proxy: f.proxy.value.trim(),
     proxyAll: f.proxyAll.checked,
+    githubProxy: f.githubProxy.value.trim(),
+    autoUpdate: f.autoUpdate.checked,
     global: collectFields($('#globalParams')),
   };
   await api('/api/config', { method: 'PUT', body: cfg });
@@ -936,6 +940,143 @@ $('#settingsForm').onsubmit = async e => {
   e.preventDefault();
   try { await saveSettings(); await probeServer(true); loadModels(); } catch (err) { toast(err.message, true); }
 };
+
+// ---------- llama.cpp 更新 ----------
+// 打开页面检测一次（服务端缓存 30 分钟），设置页可手动检测；更新在服务端后台执行，前端轮询进度。
+const upd = { check: null, timer: null, pick: {} };
+function buildText(t) { return t.build ? 'b' + t.build : (t.version || '版本未知'); }
+function updatable(c) { return (c?.targets || []).filter(t => t.hasUpdate && t.canUpdate && (t.asset || upd.pick[t.key])); }
+
+async function checkUpdate(refresh) {
+  $('#updInfo').textContent = '正在检测…';
+  try {
+    upd.check = await api('/api/update' + (refresh ? '?refresh=1' : ''));
+  } catch (e) { $('#updInfo').textContent = e.message; return null; }
+  renderUpdate();
+  if (upd.check.task?.running) pollUpdate();
+  return upd.check;
+}
+
+function renderUpdate() {
+  const c = upd.check;
+  if (!c) return;
+  const rel = c.release;
+  $('#updInfo').innerHTML = c.error ? `<span class="hot">${esc(c.error)}</span>` :
+    `最新发布：<a href="${esc(rel.url)}" target="_blank" rel="noopener">${esc(rel.tag)}</a>（${new Date(rel.published).toLocaleString()}）· 检测于 ${new Date(c.checkedAt).toLocaleTimeString()}`;
+  $('#updTargets').innerHTML = (c.targets || []).map(t => {
+    const st = !t.path ? `<span class="muted">${esc(t.reason || '未找到程序')}</span>`
+      : t.sameAs ? '<span class="muted">与 GPU 版为同一目录，一并更新</span>'
+        : !rel ? '' : t.hasUpdate ? `<span class="tag loading">可更新到 ${esc(rel.tag)}</span>` : '<span class="tag running">已是最新</span>';
+    const sel = t.path && !t.sameAs && rel && t.canUpdate ? `<label class="inline small" style="margin:6px 0 0">
+        <input type="checkbox" data-upd="${t.key}" ${t.hasUpdate ? 'checked' : ''}> 更新包
+        <select data-asset="${t.key}">${t.asset ? '' : '<option value="">请选择…</option>'}${(t.candidates || []).map(n =>
+          `<option ${(upd.pick[t.key] || t.asset?.name) === n ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></label>
+      ${t.deps?.length ? `<div class="muted small">同时下载：${t.deps.map(d => esc(d.name) + '（' + fmtBytes(d.size) + '）').join('、')}</div>` : ''}` : '';
+    return `<div class="upd-target"><div class="row"><b>${esc(t.label)}</b>
+      ${t.path ? `<span class="small">${esc(t.path)}</span><span class="chip">当前 ${esc(buildText(t))}</span>` : ''}${st}
+      ${t.backend && t.path ? `<span class="muted small">识别为 ${esc(t.backend)} 包</span>` : ''}</div>
+      ${t.path && t.reason && !t.canUpdate ? `<div class="hot small">${esc(t.reason)}</div>` : ''}${sel}</div>`;
+  }).join('');
+  $('#updTargets').querySelectorAll('[data-asset]').forEach(s => s.onchange = () => { upd.pick[s.dataset.asset] = s.value; syncUpdBtn(); });
+  $('#updTargets').querySelectorAll('[data-upd]').forEach(s => s.onchange = syncUpdBtn);
+  syncUpdBtn();
+  renderUpdTask(c.task);
+}
+
+function selectedTargets() {
+  return [...$('#updTargets').querySelectorAll('[data-upd]:checked')].map(i => i.dataset.upd)
+    .filter(k => $(`#updTargets [data-asset="${k}"]`)?.value);
+}
+function syncUpdBtn() {
+  const running = !!upd.check?.task?.running;
+  $('#btnDoUpd').disabled = running || !selectedTargets().length;
+}
+
+function renderUpdTask(t) {
+  const running = !!t?.running;
+  $('#btnCancelUpd').hidden = !running;
+  $('#btnCheckUpd').disabled = running;
+  const box = $('#updTask');
+  if (!t || !t.started || t.started.startsWith('0001')) { box.hidden = true; } else {
+    box.hidden = false;
+    const pct = t.total ? Math.min(100, t.done / t.total * 100) : 0;
+    box.innerHTML = `<div class="small">${running ? '⏳' : t.ok ? '<span class="ok-text">✔</span>' : '<span class="hot">✘</span>'} ${esc(t.tag)} · ${esc(t.step)}
+      ${t.total ? ` · ${fmtBytes(t.done)} / ${fmtBytes(t.total)}` : ''}${t.error ? ` · <span class="hot">${esc(t.error)}</span>` : ''}</div>
+      ${running ? `<div class="bar"><i style="width:${pct.toFixed(1)}%"></i></div>` : ''}
+      <pre>${(t.log || []).map(esc).join('\n')}</pre>`;
+    const pre = box.querySelector('pre'); pre.scrollTop = pre.scrollHeight;
+  }
+  // 顶部提示栏
+  const bar = $('#updBar');
+  const c = upd.check;
+  const list = updatable(c);
+  if (running) {
+    const pct = t.total ? Math.min(100, t.done / t.total * 100) : 0;
+    bar.hidden = false;
+    bar.innerHTML = `<span>正在更新 llama.cpp 到 <b>${esc(t.tag)}</b>：${esc(t.step)}</span>
+      ${t.total ? `<span class="bar"><i style="width:${pct.toFixed(1)}%"></i></span><span class="muted">${fmtBytes(t.done)} / ${fmtBytes(t.total)}</span>` : ''}
+      <button type="button" data-upd-go="settings">详情</button>`;
+  } else if (list.length && !upd.dismissed) {
+    bar.hidden = false;
+    bar.innerHTML = `<span>llama.cpp 有新版本 <a href="${esc(c.release.url)}" target="_blank" rel="noopener"><b>${esc(c.release.tag)}</b></a>（${list.map(x => esc(x.label) + ' 当前 ' + esc(buildText(x))).join('，')}）</span>
+      <button type="button" class="primary" data-upd-now>立即更新</button><button type="button" data-upd-go="settings">详情</button><button type="button" data-upd-close>忽略</button>`;
+  } else bar.hidden = true;
+  bar.querySelectorAll('[data-upd-go]').forEach(b => b.onclick = () => { switchTab('settings'); $('#updTargets').scrollIntoView({ block: 'center' }); });
+  bar.querySelector('[data-upd-now]')?.addEventListener('click', () => startUpdate(list.map(x => x.key)));
+  bar.querySelector('[data-upd-close]')?.addEventListener('click', () => { upd.dismissed = true; bar.hidden = true; });
+}
+
+async function startUpdate(keys) {
+  if (!keys.length) return;
+  const assets = {};
+  keys.forEach(k => {
+    const v = $(`#updTargets [data-asset="${k}"]`)?.value;
+    if (v) assets[k] = v;
+  });
+  try {
+    const t = await api('/api/update', { method: 'POST', body: { targets: keys, assets } });
+    upd.check.task = t;
+    renderUpdTask(t); syncUpdBtn();
+    pollUpdate();
+  } catch (e) { toast(e.message, true); }
+}
+
+function pollUpdate() {
+  clearTimeout(upd.timer);
+  upd.timer = setTimeout(async () => {
+    let t;
+    try { t = await api('/api/update/status'); } catch (e) { pollUpdate(); return; }
+    if (upd.check) upd.check.task = t;
+    renderUpdTask(t);
+    if (t.running) { pollUpdate(); return; }
+    syncUpdBtn();
+    if (t.ok) toast('llama.cpp 已更新到 ' + t.tag); else if (t.error) toast('更新失败：' + t.error, true);
+    await probeServer();
+    await checkUpdate(false);
+    loadInstances();
+  }, 1000);
+}
+
+$('#btnCheckUpd').onclick = async () => {
+  try { await saveSettings(true); } catch (e) { toast(e.message, true); return; }
+  upd.dismissed = false;
+  const c = await checkUpdate(true);
+  if (c && !c.error) toast(c.hasUpdate ? '发现新版本 ' + c.release.tag : '已是最新版本');
+};
+$('#btnDoUpd').onclick = () => startUpdate(selectedTargets());
+$('#btnCancelUpd').onclick = () => api('/api/update/cancel', { method: 'POST' }).catch(e => toast(e.message, true));
+
+// 打开页面时检测；开启自动更新时直接更新（同一版本上次更新失败则不再自动重试）
+async function autoCheckUpdate() {
+  const c = await checkUpdate(false);
+  if (!c || c.error || !state.config?.autoUpdate || c.task?.running) return;
+  if (c.task?.error && c.task.tag === c.release?.tag) return;
+  const list = updatable(c).filter(t => t.asset);
+  if (list.length) {
+    toast('检测到 llama.cpp ' + c.release.tag + '，开始自动更新');
+    startUpdate(list.map(t => t.key));
+  }
+}
 
 // ---------- 引导 ----------
 const OS_NAME = { windows: 'Windows', linux: 'Linux', darwin: 'macOS', android: 'Android' };
@@ -1038,6 +1179,7 @@ document.querySelector('.tabs [data-tab=system]').addEventListener('click', () =
   if ($('#tab-guide').classList.contains('active')) loadGuide();
   await loadInstances();
   await loadModels();
+  autoCheckUpdate();
   refreshStats();
   setInterval(refreshStats, 2000);
   setInterval(loadInstances, 3000);
