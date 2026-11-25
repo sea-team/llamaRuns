@@ -340,6 +340,7 @@ func (a *App) Routes() http.Handler {
 		_ = a.cfg.SetLastRun(g.Key, pl.last)
 		writeJSON(w, map[string]any{"ok": true, "terminal": term})
 	}))
+	mux.HandleFunc("POST /api/groups/{id}/recommend", a.withGroup(a.handleRecommend))
 	mux.HandleFunc("GET /api/groups/{id}/info", a.withGroup(func(w http.ResponseWriter, r *http.Request, g Group) {
 		q := r.URL.Query()
 		mi, err := a.info.Fetch(g, q.Get("source"), q.Get("repo"), q.Get("refresh") == "1")
@@ -376,6 +377,9 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /api/host", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, hostInfo())
 	})
+	mux.HandleFunc("GET /api/memspec", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, detectMemSpec())
+	})
 	mux.HandleFunc("GET /api/update", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, a.checkUpdate(r.URL.Query().Get("refresh") == "1"))
 	})
@@ -397,6 +401,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /api/update/status", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, a.upd.Status())
 	})
+	mux.HandleFunc("POST /api/update/test", a.handleNetTest)
 	mux.HandleFunc("POST /api/update/cancel", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"ok": a.upd.Cancel()})
 	})

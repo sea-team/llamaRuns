@@ -53,110 +53,158 @@ const state = { config: null, defaults: {}, server: {}, groups: [], instances: [
 const ALIVE = ['loading', 'running', 'stopping'];
 
 // ---------- 参数字段定义 ----------
+// 每个参数：label 中文名、flag 命令行参数、unit 单位、common 常用；
+// hint 用一两句话说明“它是什么、有什么影响”，tip 说明“怎么填”（`反引号` 内的内容显示为代码）。
 const CACHE_TYPES = ['f16', 'bf16', 'q8_0', 'q5_1', 'q5_0', 'q4_1', 'q4_0', 'iq4_nl', 'f32'];
-const ONOFF = [['on', 'on'], ['off', 'off']];
+const ONOFF = [['on', 'on（开启）'], ['off', 'off（关闭）']];
 const FIELDS = [
-  { sec: 'GPU 与显存', note: '仅 GPU 运行方式生效；显存不够或启动报 out of memory 时，优先调整这一组' },
-  { k: 'mode', label: '运行方式', type: 'select', opts: [['gpu', 'GPU'], ['cpu', 'CPU']], gpu: true,
-    hint: 'GPU：用显卡加速（使用 GPU 版 llama-server），速度快；CPU：只用处理器和内存，不占显存但慢很多。未检测到可用 GPU 时自动使用 CPU。启动时也可临时切换。' },
-  { k: 'nGpuLayers', label: 'GPU 层数 -ngl', type: 'text',
-    hint: '放进显存的模型层数，越多越快、越占显存，放不下的层由 CPU 计算。auto：配合 -fit 按显存自动计算，显存紧张或多模型混跑时推荐；999 / all：全部放入显存，最快且行为确定可复现，显存充裕（如 24GB 跑 7B/8B）时推荐；也可填具体数字。' },
-  { k: 'fit', label: '自动适配显存 -fit', type: 'select', opts: ONOFF,
-    hint: '开启后按显卡剩余显存自动调整未手动设置的参数（如 GPU 层数、上下文长度），尽量避免显存溢出。新版默认 on；想完全手动控制时设为 off。' },
-  { k: 'fitTarget', label: '每卡预留显存 -fitt (MiB)', type: 'text',
-    hint: '-fit 计算时给每块显卡留出的空闲显存，默认 1024。同时还要跑游戏、其它模型或桌面特效时调大；多卡可分别设置，如 1024,2048。' },
-  { k: 'fitCtx', label: '-fit 最小上下文 -fitc', type: 'int',
-    hint: '-fit 自动缩小上下文时不会低于这个值（默认 4096）；若仍放不下，会改为减少 GPU 层数。' },
-  { k: 'device', label: '计算设备 --device', type: 'text',
-    hint: '指定用哪些设备计算，名称见设置页“检测”结果，如 CUDA0、Vulkan0，多个用逗号分隔。留空则自动使用全部可用设备。' },
-  { k: 'splitMode', label: '多卡切分方式 -sm', type: 'select', opts: [['layer', 'layer（按层）'], ['row', 'row（按行）'], ['tensor', 'tensor'], ['none', 'none（只用主卡）']],
-    hint: '多块显卡时如何分配模型：layer 按层分到各卡（默认，兼容性最好）；row 把权重按行切分，部分场景更快但依赖卡间带宽；none 只用主 GPU。单卡无需设置。' },
-  { k: 'tensorSplit', label: '多卡分配比例 -ts', type: 'text',
-    hint: '多卡时每张卡承担的比例，如 3,1 表示第一张卡放 3/4、第二张放 1/4。通常按各卡显存大小的比例填写。' },
-  { k: 'mainGpu', label: '主 GPU 序号 -mg', type: 'int',
-    hint: '切分方式为 none 时使用的显卡，或 row 模式下存放中间结果与 KV 缓存的显卡，从 0 开始，默认 0。' },
-  { k: 'cpuMoe', label: 'MoE 专家全部放 CPU -cmoe', type: 'bool',
-    hint: '仅对 MoE（混合专家）模型有效，如 Qwen3-30B-A3B、gpt-oss：把所有专家权重放在内存由 CPU 计算，注意力等其余部分仍在 GPU。适合显存小、内存大的机器跑大 MoE 模型。' },
-  { k: 'nCpuMoe', label: '前 N 层 MoE 放 CPU -ncmoe', type: 'int',
-    hint: '只把前 N 层的专家权重放到 CPU，比 -cmoe 更精细：从小往大逐步增加 N，直到显存刚好放得下，速度优于全部放 CPU。' },
-  { k: 'kvOffload', label: 'KV 缓存放显存', type: 'bool',
-    hint: 'KV 缓存是模型对上下文的“记忆”，上下文越长越大。默认放显存；关闭（传 -nkvo）改放内存，可省下不少显存，但生成速度明显下降。' },
+  { sec: 'GPU 与显存', icon: '🎮', note: '仅 GPU 运行方式生效。启动报 out of memory（显存不足）时，优先调整这一组' },
+  { k: 'mode', label: '运行方式', type: 'select', opts: [['gpu', 'GPU（显卡加速）'], ['cpu', 'CPU（仅处理器）']], gpu: true, common: true,
+    hint: 'GPU 用显卡计算，速度快；CPU 只用处理器和内存，不占显存，但慢很多。',
+    tip: '有独立显卡选 GPU。未检测到可用 GPU 时自动用 CPU；启动时也可临时切换。' },
+  { k: 'nGpuLayers', label: 'GPU 层数', flag: '-ngl', type: 'text', common: true,
+    hint: '模型由几十层组成，这里决定放多少层进显存。放进去的越多越快，放不下的层由 CPU 计算。',
+    tip: '显存充裕（如 24GB 跑 8B）填 `999` 全部放入，最快且结果稳定；显存紧张填 `auto`，配合 -fit 自动计算；也可填具体层数。不确定时用上方「推荐配置」计算。' },
+  { k: 'fit', label: '自动适配显存', flag: '-fit', type: 'select', opts: ONOFF,
+    hint: '启动时按显卡剩余显存，自动调整你没有手动设置的参数（如 GPU 层数、上下文长度），避免显存溢出。',
+    tip: '新版默认开启，一般不用改；想完全手动控制时选 off。' },
+  { k: 'fitTarget', label: '每卡预留显存', flag: '-fitt', unit: 'MiB', type: 'text',
+    hint: '-fit 计算时给每块显卡留出的空闲显存，留给桌面、浏览器等其它程序。',
+    tip: '默认 `1024`。同时还要玩游戏、跑其它模型时调大；多卡可分别设置，如 `1024,2048`。' },
+  { k: 'fitCtx', label: '最小上下文', flag: '-fitc', type: 'int',
+    hint: '-fit 为了省显存而缩小上下文时，不会低于这个值；仍然放不下就改为减少 GPU 层数。',
+    tip: '默认 `4096`。对话需要更长记忆时调大。' },
+  { k: 'device', label: '计算设备', flag: '--device', type: 'text',
+    hint: '指定用哪些显卡/设备计算。',
+    tip: '留空自动使用全部可用设备。设备名见设置页“检测”结果，如 `CUDA0`、`Vulkan0`，多个用逗号分隔。' },
+  { k: 'splitMode', label: '多卡切分方式', flag: '-sm', type: 'select', opts: [['layer', 'layer（按层分，默认）'], ['row', 'row（按行分）'], ['tensor', 'tensor'], ['none', 'none（只用主卡）']],
+    hint: '有多块显卡时，模型如何分到各卡上。',
+    tip: '单卡无需设置。多卡一般保持 layer（兼容性最好）；row 在卡间带宽高（如 NVLink）时可能更快；none 只用主卡。' },
+  { k: 'tensorSplit', label: '多卡分配比例', flag: '-ts', type: 'text',
+    hint: '多卡时每张卡承担模型的比例。',
+    tip: '按各卡显存大小填写，如 24GB + 8GB 填 `3,1`（第一张放 3/4）。' },
+  { k: 'mainGpu', label: '主 GPU 序号', flag: '-mg', type: 'int',
+    hint: '切分方式为 none 时使用的显卡；row 模式下存放中间结果与 KV 缓存的显卡。',
+    tip: '从 0 开始，默认 `0`。' },
+  { k: 'cpuMoe', label: 'MoE 专家全部放 CPU', flag: '-cmoe', type: 'bool',
+    hint: '只对 MoE（混合专家）模型有效，如 Qwen3-30B-A3B、gpt-oss。把占体积大头的专家权重放到内存由 CPU 算，其余部分仍在 GPU。',
+    tip: '显存小、内存大时跑大 MoE 模型的利器。显存还有富余时改用下面的 -ncmoe 更快。' },
+  { k: 'nCpuMoe', label: '前 N 层专家放 CPU', flag: '-ncmoe', type: 'int',
+    hint: '只把前 N 层的专家权重放到 CPU，其余专家留在 GPU，比 -cmoe 更精细、更快。',
+    tip: '从小往大逐步增加 N，直到显存刚好放得下；「推荐配置」可以直接算出这个值。' },
+  { k: 'kvOffload', label: 'KV 缓存放显存', type: 'bool', flagOff: '-nkvo',
+    hint: 'KV 缓存是模型对上下文的“记忆”，上下文越长越大。默认放在显存里。',
+    tip: '一般保持开启。显存实在不够时关闭（改放内存）能省不少显存，但生成速度会明显下降。' },
 
-  { sec: '上下文与性能', note: '影响能处理多长的对话、内存/显存占用和处理速度' },
-  { k: 'ctxSize', label: '上下文长度 -c', type: 'int',
-    hint: '模型一次能“记住”的最大 token 数（提示词 + 历史对话 + 回复）。越大越占内存/显存。0 表示用模型训练时的最大值（可能 128K 以上，容易爆内存）；日常对话 4096~16384，长文档/代码 32768 左右。' },
-  { k: 'threads', label: 'CPU 线程数 -t', type: 'int',
-    hint: '生成回复时使用的 CPU 线程数，留空自动。纯 CPU 运行时设为物理核心数通常最快，超过物理核心数反而可能变慢。' },
-  { k: 'threadsBatch', label: '提示处理线程数 -tb', type: 'int',
-    hint: '处理输入提示词（预填充）时的线程数，默认与 -t 相同。可设为逻辑核心数以加快长提示词的处理。' },
-  { k: 'parallel', label: '并发槽数 -np', type: 'int',
-    hint: '服务端能同时处理的请求数。多个请求会分摊上下文，如 -c 8192 -np 4 时每个请求约 2048。多人或多个客户端同时使用时调大；默认自动。' },
-  { k: 'batchSize', label: '逻辑批大小 -b', type: 'int',
-    hint: '一次最多提交处理的提示词 token 数，默认 2048。调大可加快长提示词处理，但占用更多显存/内存。' },
-  { k: 'ubatchSize', label: '物理批大小 -ub', type: 'int',
-    hint: '实际每次送入计算的 token 数，默认 512，不能大于 -b。显存不足时可减小到 256 或 128；显存充裕时调大可加快提示处理。' },
-  { k: 'flashAttn', label: 'Flash Attention -fa', type: 'select', opts: [['auto', 'auto'], ['on', 'on'], ['off', 'off'], ['none', '不传递（旧版）']],
-    hint: '一种更高效的注意力计算方式：降低显存占用、加快长上下文处理，也是量化 V 缓存的前提。auto 自动判断（推荐）。旧版 llama.cpp 不认识 on/off/auto 时选“不传递”。' },
-  { k: 'cacheTypeK', label: 'K 缓存精度 -ctk', type: 'select', opts: CACHE_TYPES.map(v => [v, v]),
-    hint: 'KV 缓存中 K 部分的数据类型。默认 f16；q8_0 约省一半 KV 占用且几乎无损；q4_0 更省但回答质量会下降。' },
-  { k: 'cacheTypeV', label: 'V 缓存精度 -ctv', type: 'select', opts: CACHE_TYPES.map(v => [v, v]),
-    hint: 'KV 缓存中 V 部分的数据类型，量化（如 q8_0）需要开启 Flash Attention。长上下文时与 K 一起设为 q8_0 可显著节省显存。' },
-  { k: 'cacheRam', label: '提示缓存上限 -cram (MiB)', type: 'int',
-    hint: '在内存中缓存处理过的提示词，多轮对话或重复前缀时可跳过重复计算、加快响应。默认 8192，-1 不限制，0 关闭。' },
-  { k: 'mlock', label: '锁定内存 --mlock', type: 'bool',
-    hint: '把模型锁在物理内存中，防止被系统换到硬盘导致忽快忽慢。需要内存足够大；Linux 下可能需要额外权限。' },
-  { k: 'noMmap', label: '禁用内存映射 --no-mmap', type: 'bool',
-    hint: '默认模型按需从文件映射到内存，加载快且可与系统共享缓存。开启后改为一次性完整读入内存：加载更慢、占用更多，但在网络盘等环境下更稳定。一般保持关闭。' },
-  { k: 'contextShift', label: '上下文平移 --context-shift', type: 'bool',
-    hint: '上下文写满时自动丢弃最早的一部分内容继续生成，而不是报错停止。开启后模型会“忘记”对话开头的内容。' },
+  { sec: '上下文与性能', icon: '⚡', note: '决定能处理多长的对话，以及内存/显存占用和处理速度' },
+  { k: 'ctxSize', label: '上下文长度', flag: '-c', unit: 'token', type: 'int', common: true,
+    hint: '模型一次能“记住”的内容上限：提示词 + 历史对话 + 回复都算在内。越大越占内存/显存。',
+    tip: '日常对话 `8192`~`16384`，长文档/代码 `32768`。填 `0` 表示用模型最大值（可能 128K 以上，容易爆显存）。1 个汉字约 1~2 个 token。' },
+  { k: 'threads', label: 'CPU 线程数', flag: '-t', type: 'int',
+    hint: '生成回复时使用的 CPU 线程数。',
+    tip: '留空自动（通常等于物理核心数，即最佳值）。超过物理核心数反而可能变慢。' },
+  { k: 'threadsBatch', label: '提示处理线程数', flag: '-tb', type: 'int',
+    hint: '处理输入提示词（预填充）时的线程数。',
+    tip: '默认与 -t 相同；可设为逻辑核心数，加快长提示词的处理。' },
+  { k: 'parallel', label: '并发槽数', flag: '-np', type: 'int',
+    hint: '服务端能同时处理的请求数，多个请求分摊总上下文。',
+    tip: '默认自动。例如 `-c 32768 -np 4` 时每个请求约 8K。多人或多个客户端同时使用时调大。' },
+  { k: 'batchSize', label: '逻辑批大小', flag: '-b', type: 'int',
+    hint: '一次最多提交处理的提示词 token 数。',
+    tip: '默认 `2048`，一般不用改。调大可加快超长提示词处理，但更占显存。' },
+  { k: 'ubatchSize', label: '物理批大小', flag: '-ub', type: 'int',
+    hint: '每次真正送入计算的 token 数，不能大于 -b。',
+    tip: '默认 `512`。显存不足时减到 `256`；显存充裕时调到 `1024`~`2048` 可加快提示处理。' },
+  { k: 'flashAttn', label: 'Flash Attention', flag: '-fa', type: 'select', opts: [['auto', 'auto（自动，推荐）'], ['on', 'on（开启）'], ['off', 'off（关闭）'], ['none', '不传递（旧版）']], common: true,
+    hint: '更高效的注意力计算方式：省显存、长上下文更快，也是量化 V 缓存的前提。',
+    tip: '保持 auto 即可。旧版 llama.cpp 不认识 on/off/auto 而报错时选“不传递”。' },
+  { k: 'cacheTypeK', label: 'K 缓存精度', flag: '-ctk', type: 'select', opts: CACHE_TYPES.map(v => [v, v]),
+    hint: 'KV 缓存中 K 部分的数据类型，精度越低越省显存。',
+    tip: '默认 f16。`q8_0` 省约一半且几乎无损，长上下文推荐；`q4_0` 更省但回答质量会下降。' },
+  { k: 'cacheTypeV', label: 'V 缓存精度', flag: '-ctv', type: 'select', opts: CACHE_TYPES.map(v => [v, v]),
+    hint: 'KV 缓存中 V 部分的数据类型；量化需要开启 Flash Attention。',
+    tip: '通常与 K 缓存设成一样，如都设为 `q8_0`。' },
+  { k: 'cacheRam', label: '提示缓存上限', flag: '-cram', unit: 'MiB', type: 'int',
+    hint: '在内存里缓存处理过的提示词，多轮对话或重复前缀时可跳过重复计算，响应更快。',
+    tip: '默认 `8192`；`-1` 不限制，`0` 关闭。内存紧张时调小。' },
+  { k: 'mlock', label: '锁定内存', flag: '--mlock', type: 'bool',
+    hint: '把模型锁在物理内存中，防止被系统换到硬盘导致忽快忽慢。',
+    tip: '内存足够大时可开启；Linux 下可能需要额外权限。' },
+  { k: 'noMmap', label: '禁用内存映射', flag: '--no-mmap', type: 'bool',
+    hint: '默认模型按需从文件映射进内存，加载快。开启后改为一次性完整读入：加载更慢、占用更多。',
+    tip: '一般保持关闭；模型在网络盘上、运行中出现卡顿时可尝试开启。' },
+  { k: 'contextShift', label: '上下文平移', flag: '--context-shift', type: 'bool',
+    hint: '上下文写满时，自动丢弃最早的一部分内容继续生成，而不是报错停止。',
+    tip: '长时间连续对话可开启；代价是模型会“忘记”对话开头的内容。' },
 
-  { sec: '采样', note: '控制回复的随机性与风格；建议优先使用“模型介绍”中提取的推荐值' },
-  { k: 'temp', label: '温度 --temp', type: 'float',
-    hint: '越高回复越随机、越有创意，越低越稳定、越确定。代码/数学建议 0.2~0.6，聊天/写作 0.7~1.0。默认 0.8。' },
-  { k: 'topK', label: 'Top-K --top-k', type: 'int',
-    hint: '每一步只从概率最高的 K 个候选词中挑选，越小越保守。0 表示不限制，默认 40。' },
-  { k: 'topP', label: 'Top-P --top-p', type: 'float',
-    hint: '只在累计概率达到 P 的候选词里挑选（核采样），越小越保守。1.0 表示关闭，默认 0.95。' },
-  { k: 'minP', label: 'Min-P --min-p', type: 'float',
-    hint: '丢弃概率低于“最高概率 × P”的候选词，比 Top-P 更能适应不同情形。0 表示关闭，默认 0.05。' },
-  { k: 'repeatPenalty', label: '重复惩罚 --repeat-penalty', type: 'float',
-    hint: '降低最近出现过的词再次出现的概率，大于 1 才生效（常用 1.05~1.15）。过大会让表达变得别扭。默认 1.0（关闭）。' },
-  { k: 'presencePenalty', label: '存在惩罚 --presence-penalty', type: 'float',
-    hint: '对出现过的词统一施加惩罚，鼓励谈论新内容，可缓解思考类模型陷入循环重复（Qwen3 推荐 0~1.5）。默认 0（关闭）。' },
-  { k: 'seed', label: '随机种子 -s', type: 'int',
-    hint: '固定种子后，相同输入和参数会得到相同输出，便于对比调参；-1 表示每次随机。' },
-  { k: 'nPredict', label: '最大回复长度 -n', type: 'int',
-    hint: '单次回复最多生成的 token 数，-1 表示不限制（直到模型自行结束或上下文用满）。客户端请求中的 max_tokens 会覆盖此值。' },
+  { sec: '采样', icon: '🎲', note: '控制回复的随机性与风格。建议优先使用“模型介绍”中提取的官方推荐值' },
+  { k: 'temp', label: '温度', flag: '--temp', type: 'float', common: true,
+    hint: '越高回复越随机、越有创意；越低越稳定、越确定。',
+    tip: '代码/数学 `0.2`~`0.6`，聊天/写作 `0.7`~`1.0`。默认 0.8。' },
+  { k: 'topK', label: 'Top-K', flag: '--top-k', type: 'int',
+    hint: '每一步只从概率最高的 K 个候选词里挑，越小越保守。',
+    tip: '默认 `40`，`0` 表示不限制。常用 20~40。' },
+  { k: 'topP', label: 'Top-P', flag: '--top-p', type: 'float',
+    hint: '只在累计概率达到 P 的候选词里挑（核采样），越小越保守。',
+    tip: '默认 `0.95`，`1.0` 表示关闭。' },
+  { k: 'minP', label: 'Min-P', flag: '--min-p', type: 'float',
+    hint: '丢弃概率低于“最高概率 × P”的候选词，比 Top-P 更能适应不同情形。',
+    tip: '默认 `0.05`，`0` 表示关闭。' },
+  { k: 'repeatPenalty', label: '重复惩罚', flag: '--repeat-penalty', type: 'float',
+    hint: '降低最近出现过的词再次出现的概率，大于 1 才生效。',
+    tip: '默认 `1.0`（关闭）。出现复读时设为 `1.05`~`1.15`；过大会让表达变得别扭。' },
+  { k: 'presencePenalty', label: '存在惩罚', flag: '--presence-penalty', type: 'float',
+    hint: '对出现过的词统一施加惩罚，鼓励谈论新内容。',
+    tip: '默认 `0`（关闭）。思考类模型陷入循环时可设 `0.5`~`1.5`（Qwen3 官方推荐范围）。' },
+  { k: 'seed', label: '随机种子', flag: '-s', type: 'int',
+    hint: '固定种子后，相同输入和参数会得到相同输出。',
+    tip: '对比调参效果时固定一个数字；`-1` 表示每次随机（默认）。' },
+  { k: 'nPredict', label: '最大回复长度', flag: '-n', unit: 'token', type: 'int',
+    hint: '单次回复最多生成的 token 数。',
+    tip: '`-1` 不限制（直到模型自行结束或上下文用满）。客户端请求中的 max_tokens 会覆盖此值。' },
 
-  { sec: '模板与推理', note: '聊天格式、工具调用和思考模式' },
-  { k: 'jinja', label: 'Jinja 聊天模板 --jinja', type: 'bool',
-    hint: '使用模型文件内置的 Jinja 聊天模板，工具调用（function calling）和思考模式都依赖它。新版默认开启，一般保持开启。' },
-  { k: 'reasoning', label: '思考模式 -rea', type: 'select', opts: [['auto', 'auto'], ['on', 'on'], ['off', 'off']],
-    hint: '针对会“先思考再回答”的模型（如 Qwen3、DeepSeek-R1）：auto 按模板自动识别；on 强制开启；off 关闭思考，回复更快但复杂问题效果可能变差。' },
-  { k: 'reasoningBudget', label: '思考预算 --reasoning-budget', type: 'int',
-    hint: '思考阶段最多使用的 token 数：-1 不限制；0 跳过思考直接回答；正数表示达到后强制结束思考并给出答案。' },
-  { k: 'chatTemplateKwargs', label: '模板参数 --chat-template-kwargs', type: 'text',
-    hint: '传给聊天模板的额外参数（JSON 格式），例如 {"enable_thinking":false} 可关闭 Qwen3 的思考。' },
+  { sec: '模板与推理', icon: '🧠', note: '聊天格式、工具调用和思考模式' },
+  { k: 'jinja', label: 'Jinja 聊天模板', flag: '--jinja', flagOff: '--no-jinja', type: 'bool',
+    hint: '使用模型文件内置的聊天模板。工具调用（function calling）和思考模式都依赖它。',
+    tip: '一般保持开启（新版默认开启）。' },
+  { k: 'reasoning', label: '思考模式', flag: '-rea', type: 'select', opts: [['auto', 'auto（按模板识别）'], ['on', 'on（强制开启）'], ['off', 'off（关闭思考）']],
+    hint: '针对会“先思考再回答”的模型（如 Qwen3、DeepSeek-R1）。',
+    tip: '保持 auto。想要回复更快时选 off，但复杂问题效果可能变差。' },
+  { k: 'reasoningBudget', label: '思考预算', flag: '--reasoning-budget', unit: 'token', type: 'int',
+    hint: '思考阶段最多使用的 token 数，达到后强制结束思考并给出答案。',
+    tip: '`-1` 不限制；`0` 跳过思考直接回答。' },
+  { k: 'chatTemplateKwargs', label: '模板参数', flag: '--chat-template-kwargs', type: 'text',
+    hint: '传给聊天模板的额外参数（JSON 格式）。',
+    tip: '例如 `{"enable_thinking":false}` 可关闭 Qwen3 的思考。' },
 
-  { sec: '服务', note: '仅 llama-server 生效，llama-cli 会忽略' },
-  { k: 'host', label: '监听地址 --host', type: 'text',
-    hint: '127.0.0.1 仅本机可访问；0.0.0.0 允许局域网内其它设备访问（建议同时设置 API Key）。' },
-  { k: 'port', label: '端口 --port', type: 'int',
-    hint: '服务端口。0 表示从设置中的“自动分配端口起始值”开始寻找空闲端口；同时运行多个模型时建议保持自动。' },
-  { k: 'apiKey', label: 'API Key --api-key', type: 'text',
-    hint: '设置后，客户端需在请求头携带 Authorization: Bearer <密钥> 才能调用。服务对局域网或外网开放时务必设置。' },
-  { k: 'alias', label: '模型别名 -a', type: 'text', modelOnly: true,
-    hint: '接口 /v1/models 返回的模型名称，客户端按这个名字调用。留空使用文件名。' },
-  { k: 'webui', label: '内置网页聊天 Web UI', type: 'bool',
-    hint: 'llama-server 自带的网页聊天界面，浏览器打开 http://地址:端口 即可使用。只作 API 服务时可关闭（传 --no-webui）。' },
-  { k: 'metrics', label: '监控指标 --metrics', type: 'bool',
-    hint: '开启 /metrics 接口，输出 Prometheus 格式的吞吐、排队等指标，用于接入监控系统。' },
+  { sec: '服务', icon: '🌐', note: '仅 llama-server 生效，llama-cli 会忽略' },
+  { k: 'host', label: '监听地址', flag: '--host', type: 'text',
+    hint: '决定谁能访问这个服务。',
+    tip: '`127.0.0.1` 仅本机；`0.0.0.0` 允许局域网其它设备访问（务必同时设置 API Key）。' },
+  { k: 'port', label: '端口', flag: '--port', type: 'int',
+    hint: '服务监听的端口号。',
+    tip: '`0` 表示自动：从设置中的“自动分配端口起始值”找空闲端口。同时运行多个模型时保持自动。' },
+  { k: 'apiKey', label: 'API Key', flag: '--api-key', type: 'text',
+    hint: '设置后，客户端必须在请求头携带 Authorization: Bearer <密钥> 才能调用。',
+    tip: '服务对局域网或外网开放时务必设置。' },
+  { k: 'alias', label: '模型别名', flag: '-a', type: 'text', modelOnly: true,
+    hint: '接口 /v1/models 返回的模型名称，客户端按这个名字调用。',
+    tip: '留空使用文件名。' },
+  { k: 'webui', label: '内置网页聊天', flagOff: '--no-webui', type: 'bool',
+    hint: 'llama-server 自带的网页聊天界面，浏览器打开 http://地址:端口 即可使用。',
+    tip: '只作 API 服务时可关闭。' },
+  { k: 'metrics', label: '监控指标', flag: '--metrics', type: 'bool',
+    hint: '开启 /metrics 接口，输出 Prometheus 格式的吞吐、排队等指标。',
+    tip: '接入监控系统时开启，平时不需要。' },
 
-  { sec: '其它' },
-  { k: 'extraArgs', label: '附加参数（原样追加到命令行）', type: 'textarea', wide: true,
-    hint: '上面没有列出的参数写在这里，会原样追加到命令末尾，例如 --rope-scaling yarn、--swa-full、--lora 路径。完整列表可运行 llama-server --help 查看。' },
+  { sec: '其它', icon: '🧩' },
+  { k: 'extraArgs', label: '附加参数', type: 'textarea', wide: true,
+    hint: '上面没有列出的参数写在这里，会原样追加到命令末尾。',
+    tip: '例如 `--rope-scaling yarn`、`--swa-full`、`--lora 路径`。完整列表可运行 `llama-server --help` 查看。' },
 ];
-const FIELD_LABEL = Object.fromEntries(FIELDS.filter(f => f.k).map(f => [f.k, f.label]));
+const FIELD_LABEL = Object.fromEntries(FIELDS.filter(f => f.k).map(f => [f.k, f.label + (f.flag ? ' ' + f.flag : '')]));
+// tipHTML 转义文本，并把 `反引号` 包裹的内容显示为代码。
+const tipHTML = s => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>');
 
 function showVal(f, v) {
   if (v === undefined || v === null) return '';
@@ -164,15 +212,17 @@ function showVal(f, v) {
   return String(v);
 }
 
-// renderFields 生成参数表单。inherit 为回退值（用于占位提示），isModel 表示模型参数模式。
+// renderFields 生成参数表单（含搜索与“只看常用”筛选）。inherit 为回退值（用于占位提示），isModel 表示模型参数模式。
 function renderFields(container, values, inherit, isModel) {
   const gpuOK = state.server.gpuOk !== false;
-  container.innerHTML = '';
+  container.innerHTML = `<div class="pf-tools wide"><input type="search" class="pf-q" placeholder="搜索参数：中文名、命令行参数或说明，如 显存、-c、思考">
+    <label class="inline"><input type="checkbox" class="pf-common"> 只看常用</label>
+    <span class="muted small">已修改的参数会以蓝色标记</span></div>`;
   for (const f of FIELDS) {
     if (f.sec) {
       const h = document.createElement('div');
       h.className = 'fsec';
-      h.innerHTML = esc(f.sec) + (f.note ? ` <small>${esc(f.note)}</small>` : '');
+      h.innerHTML = `<span class="fsec-ic">${f.icon || ''}</span>${esc(f.sec)}` + (f.note ? `<small>${esc(f.note)}</small>` : '');
       container.appendChild(h);
       continue;
     }
@@ -181,7 +231,10 @@ function renderFields(container, values, inherit, isModel) {
     const inh = showVal(f, inherit[f.k]);
     const emptyLabel = isModel ? `继承（${inh || '未设置'}）` : (inh ? `默认（${inh}）` : '未设置');
     const lab = document.createElement('label');
-    if (f.wide) lab.className = 'wide';
+    lab.className = 'pf' + (f.wide ? ' wide' : '') + (v !== undefined && v !== null && v !== '' ? ' set' : '');
+    lab.dataset.k = f.k;
+    lab.dataset.search = [f.label, f.flag, f.flagOff, f.hint, f.tip].join(' ').toLowerCase();
+    if (f.common) lab.dataset.common = '1';
     let input;
     if (f.type === 'select' || f.type === 'bool') {
       const opts = f.type === 'bool' ? [['true', '开启'], ['false', '关闭']] : f.opts;
@@ -197,9 +250,34 @@ function renderFields(container, values, inherit, isModel) {
       const step = f.type === 'float' ? ' step="any"' : '';
       input = `<input name="${f.k}" type="${t}"${step} value="${esc(v ?? '')}" placeholder="${esc(inh ? (isModel ? '继承：' : '默认：') + inh : '')}">`;
     }
-    lab.innerHTML = `${esc(f.label)}${input}${f.hint ? `<div class="field-hint">${esc(f.hint)}</div>` : ''}`;
+    const flags = [f.flag, f.flagOff && f.flagOff + (f.flag ? '' : '（关闭时）')].filter(Boolean)
+      .map(x => `<code class="pf-flag">${esc(x)}</code>`).join('');
+    lab.innerHTML = `<div class="pf-head"><span class="pf-name">${esc(f.label)}</span>${flags}` +
+      `${f.unit ? `<span class="pf-unit">${esc(f.unit)}</span>` : ''}${f.common ? '<span class="pf-badge">常用</span>' : ''}</div>${input}` +
+      (f.hint ? `<div class="pf-desc">${tipHTML(f.hint)}</div>` : '') +
+      (f.tip ? `<div class="pf-tip"><b>怎么填</b>${tipHTML(f.tip)}</div>` : '');
     container.appendChild(lab);
   }
+  const q = $('.pf-q', container), common = $('.pf-common', container);
+  const apply = () => {
+    const kw = q.value.trim().toLowerCase();
+    let sec = null, shown = 0;
+    const flush = () => { if (sec) sec.hidden = !shown; };
+    for (const el of container.children) {
+      if (el.classList.contains('fsec')) { flush(); sec = el; shown = 0; continue; }
+      if (!el.classList.contains('pf')) continue;
+      el.hidden = (common.checked && !el.dataset.common) || (kw && !el.dataset.search.includes(kw));
+      if (!el.hidden) shown++;
+    }
+    flush();
+  };
+  q.oninput = apply;
+  common.onchange = apply;
+  // 修改后即时标记，方便看出哪些参数不是默认值
+  container.oninput = container.onchange = e => {
+    const lab = e.target.closest?.('.pf');
+    if (lab && e.target.name) lab.classList.toggle('set', e.target.value.trim() !== '');
+  };
 }
 
 function collectFields(container) {
@@ -455,6 +533,7 @@ $('#miniStat').onclick = () => { switchTab('system'); refreshStats(); };
 async function loadModels() {
   try { state.groups = await api('/api/groups'); } catch (e) { toast(e.message, true); }
   renderModels();
+  recGroups();
   // 提示无法访问的目录（如网络共享掉线），使用刚才扫描的结果
   try {
     const bad = (await api('/api/dirs?cached=1')).filter(x => x.error);
@@ -482,6 +561,7 @@ function renderModels() {
         <button data-act="cli">CLI 命令</button>
         <button data-act="params">参数</button>
         <button data-act="info">介绍</button>
+        <button data-act="rec" title="按硬件计算最佳启动参数">推荐配置</button>
       </div>`;
     if (g.variants.length === 1) {
       const v = g.variants[0];
@@ -526,6 +606,7 @@ $('#modelList').onclick = e => {
   else if (act === 'stop') stopInstance(g.id);
   else if (act === 'params') paramsDialog(g);
   else if (act === 'info') infoDialog(g);
+  else if (act === 'rec') openRec(g, variant);
 };
 
 function cmdBox(id, label) {
@@ -890,6 +971,7 @@ async function loadConfig() {
   f.proxy.value = d.config.proxy || '';
   f.proxyAll.checked = !!d.config.proxyAll;
   f.githubProxy.value = d.config.githubProxy || '';
+  f.githubMirror.value = d.config.githubMirror || '';
   f.autoUpdate.checked = !!d.config.autoUpdate;
   renderFields($('#globalParams'), d.config.global || {}, d.defaults, false);
 }
@@ -929,6 +1011,7 @@ async function saveSettings(silent) {
     proxy: f.proxy.value.trim(),
     proxyAll: f.proxyAll.checked,
     githubProxy: f.githubProxy.value.trim(),
+    githubMirror: f.githubMirror.value.trim(),
     autoUpdate: f.autoUpdate.checked,
     global: collectFields($('#globalParams')),
   };
@@ -941,17 +1024,268 @@ $('#settingsForm').onsubmit = async e => {
   try { await saveSettings(); await probeServer(true); loadModels(); } catch (err) { toast(err.message, true); }
 };
 
+// ---------- 推荐配置 ----------
+// 填入内存、显存并选择模型，由服务端读取 GGUF 文件头估算占用，返回推荐参数、命令与原因说明。
+const PLAN_TEXT = { gpu: '全部在 GPU', moe: 'GPU + MoE 专家在 CPU', partial: 'GPU + CPU 分层', cpu: '纯 CPU' };
+const rc = { filled: false, last: null };
+// recGroups 刷新模型下拉框，保留当前选择。
+function recGroups(gid, variant) {
+  const gs = state.groups || [];
+  const sel = $('#rcGroup');
+  const cur = gid || sel.value;
+  sel.innerHTML = gs.length ? gs.map(g => `<option value="${g.id}">${esc(g.name)}${g.variants.length > 1 ? `（${g.variants.length} 个版本）` : ''}</option>`).join('')
+    : '<option value="">（没有模型，请先添加模型目录）</option>';
+  if (cur && gs.some(g => g.id === cur)) sel.value = cur;
+  recVariants(variant || (gid ? '' : $('#rcVariant').value));
+}
+function recVariants(variant) {
+  const g = state.groups.find(x => x.id === $('#rcGroup').value);
+  const vs = g?.variants || [];
+  $('#rcVariant').innerHTML = vs.map(v => `<option value="${esc(v.path)}">${esc(v.quant || v.name)} · ${fmtBytes(v.size)}${v.path === g.lastVariant ? '（上次运行）' : ''}</option>`).join('');
+  const want = [variant, g?.lastVariant].find(p => p && vs.some(v => v.path === p));
+  if (want) $('#rcVariant').value = want;
+  $('#rcVisionBox').hidden = !g?.mmprojs?.length;
+  $('#rcVision').checked = !!g?.mmprojs?.length;
+}
+$('#rcGroup').onchange = () => recVariants();
+
+// 内存规格：选具体规格（如 DDR4-3200）即确定传输率，带宽 = 传输率(MT/s) × 8 字节 × 通道数；
+// LPDDR 按每 64 位位宽计一个通道。Apple 芯片为统一内存，带宽按型号。
+const MEM_SPECS = [
+  ['ddr3', 'DDR3', [1066, 1333, 1600, 1866]],
+  ['ddr4', 'DDR4', [2133, 2400, 2666, 2933, 3200, 3600]],
+  ['ddr5', 'DDR5', [4800, 5200, 5600, 6000, 6400, 7200, 8000]],
+  ['lpddr4x', 'LPDDR4X', [3733, 4266]],
+  ['lpddr5', 'LPDDR5', [5500, 6400]],
+  ['lpddr5x', 'LPDDR5X', [7500, 8533]],
+];
+const APPLE_CHIPS = [['M1', 68], ['M1 Pro', 200], ['M1 Max', 400], ['M2', 100], ['M2 Pro', 200], ['M2 Max', 400], ['M3', 100], ['M3 Pro', 150], ['M3 Max', 400],
+  ['M4', 120], ['M4 Pro', 273], ['M4 Max', 546], ['M5', 153], ['M1 Ultra', 800], ['M2 Ultra', 800], ['M3 Ultra', 819]];
+const memOpt = (type, label, mts, extra = '') =>
+  `<option value="${type}-${mts}">${label}-${mts}（每通道 ${(mts * 8 / 1000).toFixed(1)} GB/s）${extra}</option>`;
+$('#rcMemType').innerHTML = '<option value="">未知（不估算速度）</option>' +
+  MEM_SPECS.map(([t, l, list]) => `<optgroup label="${l}${t.startsWith('lp') ? '（轻薄本/手机，板载内存）' : ''}">${list.map(m => memOpt(t, l, m)).join('')}</optgroup>`).join('') +
+  `<optgroup label="Apple 芯片（统一内存）">${APPLE_CHIPS.map(([n, bw]) => `<option value="apple:${n}">Apple ${n}（${bw} GB/s）</option>`).join('')}</optgroup>`;
+function memTypeInfo() {
+  const v = $('#rcMemType').value;
+  if (v.startsWith('apple:')) {
+    const c = APPLE_CHIPS.find(x => x[0] === v.slice(6));
+    return { apple: true, name: 'Apple ' + c[0], bw: c[1] };
+  }
+  const [t, mts] = v.split('-');
+  const spec = MEM_SPECS.find(x => x[0] === t);
+  return spec && +mts ? { type: t, label: spec[1] + '-' + mts, mts: +mts } : null;
+}
+// selectMemSpec 选中检测到的规格；列表中没有该速率时追加一项“本机检测”。
+function selectMemSpec(type, mts) {
+  const spec = MEM_SPECS.find(x => x[0] === type);
+  if (!spec) return false;
+  if (!mts) mts = spec[2][Math.floor(spec[2].length / 2)];
+  const sel = $('#rcMemType'), v = `${type}-${mts}`;
+  if (![...sel.options].some(o => o.value === v)) {
+    const g = [...sel.querySelectorAll('optgroup')].find(x => x.label.startsWith(spec[1]));
+    g?.insertAdjacentHTML('afterbegin', memOpt(type, spec[1], mts, '（本机检测）'));
+  }
+  sel.value = v;
+  return true;
+}
+// recMemCalc 按规格与通道计算带宽（带宽一栏可再手动修改）。
+function recMemCalc() {
+  const m = memTypeInfo();
+  $('#rcChBox').hidden = !m || m.apple;
+  if (!m) { $('#rcMemBW').value = ''; $('#rcMemHint').textContent = ''; return; }
+  if (m.apple) {
+    $('#rcMemBW').value = m.bw;
+    $('#rcUnified').checked = true;
+    $('#rcMemHint').textContent = `${m.name} 为统一内存：显存与内存共用，显存一栏填 GPU 可用部分（macOS 默认约内存的 2/3~3/4）。`;
+    return;
+  }
+  const ch = parseInt($('#rcMemCh').value, 10) || 2;
+  $('#rcMemBW').value = Math.round(m.mts * 8 * ch / 100) / 10;
+  $('#rcMemHint').textContent = `理论带宽 = ${m.mts} MT/s × 8 字节 × ${ch} 通道 ≈ ${$('#rcMemBW').value} GB/s。` +
+    'CPU 参与计算时（纯 CPU、MoE 专家放 CPU、部分层放 GPU），生成速度基本与内存带宽成正比。';
+}
+function recMemName() {
+  const m = memTypeInfo();
+  if (!m) return '';
+  if (m.apple) return m.name + ' 统一内存';
+  const ch = $('#rcMemCh').selectedOptions[0]?.textContent.replace(/（.*/, '') || '';
+  return `${m.label} ${ch}`;
+}
+$('#rcMemType').onchange = $('#rcMemCh').onchange = recMemCalc;
+recMemCalc();
+
+// recFillHw 用本机检测到的内存与显存填写表单。
+async function recFillHw(silent) {
+  let s;
+  try { s = await api('/api/stats'); } catch (e) { if (!silent) toast(e.message, true); return; }
+  const GB = 2 ** 30, r1 = x => Math.round(x * 10) / 10;
+  const ram = s.memTotal / GB;
+  const gpus = (s.gpus || []).filter(g => g.memTotal > 0);
+  let vram = gpus.reduce((n, g) => n + g.memTotal, 0) / GB;
+  // Apple 芯片：GPU 与 CPU 共用内存，macOS 默认允许 GPU 使用约 2/3（大内存约 3/4）
+  const unified = state.os === 'darwin' && !gpus.length && state.host?.arch === 'arm64';
+  if (unified) vram = ram * (ram > 36 ? 0.75 : 0.67);
+  $('#rcRam').value = Math.round(ram);
+  $('#rcVram').value = r1(vram);
+  $('#rcUnified').checked = unified;
+  rc.filled = true;
+  // 内存规格（Windows 读 WMI；Linux 需 root 运行 dmidecode；macOS 按芯片型号）
+  let ms = {};
+  try { ms = await api('/api/memspec'); } catch { /* 忽略 */ }
+  // Apple 芯片取名称最长的匹配（如 “M2 Pro” 优先于 “M2”）
+  const chip = ms.type === 'apple' && APPLE_CHIPS.filter(([n]) => ms.chip?.includes(n)).sort((a, b) => b[0].length - a[0].length)[0];
+  if (chip) {
+    $('#rcMemType').value = 'apple:' + chip[0];
+  } else if (selectMemSpec(ms.type === 'lpddr4' ? 'lpddr4x' : ms.type, ms.speed)) {
+    if (ms.channels) $('#rcMemCh').value = String(ms.channels);
+  }
+  recMemCalc();
+  if (unified) $('#rcVram').value = r1(vram);
+  const notes = [ms.modules && ms.modules + ' 条', ms.type !== 'apple' && !ms.speed && '频率未检测到，按常见值', ms.modules && '通道数为推测'].filter(Boolean);
+  const memText = ms.type ? ' · ' + recMemName() + (notes.length ? '（' + notes.join('，') + '）' : '') : ' · 内存规格未检测到，请手动选择';
+  $('#rcHwInfo').textContent = '本机：内存 ' + r1(ram) + ' GB' + memText + ' · ' + (gpus.length
+    ? gpus.map(g => `${g.name} ${r1(g.memTotal / GB)} GB`).join('，') + (gpus.length > 1 ? '（多卡按显存总和计算）' : '')
+    : unified ? '统一内存，GPU 可用约 ' + r1(vram) + ' GB' : '未检测到显卡显存（有独立显卡时请手动填写）');
+}
+$('#btnRecHw').onclick = () => recFillHw();
+
+async function recRun() {
+  const gid = $('#rcGroup').value;
+  if (!gid) return toast('请先选择模型（需要先在下方添加模型目录）', true);
+  const body = {
+    variant: $('#rcVariant').value,
+    ramGB: parseFloat($('#rcRam').value),
+    vramGB: parseFloat($('#rcVram').value) || 0,
+    unified: $('#rcUnified').checked,
+    ctx: parseInt($('#rcCtx').value, 10) || 0,
+    users: parseInt($('#rcUsers').value, 10) || 1,
+    vision: !$('#rcVisionBox').hidden && $('#rcVision').checked,
+    memBW: parseFloat($('#rcMemBW').value) || 0,
+    memName: recMemName(),
+  };
+  if (!(body.ramGB > 0)) return toast('请填写内存大小', true);
+  const box = $('#rcRes'), btn = $('#btnRec');
+  box.hidden = false;
+  box.innerHTML = '<div class="muted">正在读取模型文件并计算…</div>';
+  btn.disabled = true;
+  try {
+    const d = await api(`/api/groups/${gid}/recommend`, { method: 'POST', body });
+    rc.last = { gid, d, body };
+    renderRec();
+  } catch (e) {
+    box.innerHTML = `<div class="rec-warn">${esc(e.message)}</div>`;
+  } finally { btn.disabled = false; }
+}
+$('#btnRec').onclick = recRun;
+$('#rcfg').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && e.target.tagName === 'INPUT') { e.preventDefault(); recRun(); }
+});
+
+// memBar 画一条占用条：各项按硬件总量的比例，末尾斜线为预留。
+function memBar(name, total, items, reserve) {
+  const GB = 2 ** 30;
+  const used = items.reduce((n, x) => n + x.v, 0);
+  const pct = v => total > 0 ? Math.min(100, v / total * 100) : 0;
+  const over = used + reserve > total;
+  return `<span>${name}</span><div class="rec-bar${over ? ' over' : ''}" title="${esc(items.map(x => `${x.label} ${fmtBytes(x.v)}`).join('\n'))}">` +
+    items.filter(x => x.v > 0).map(x => `<i class="${x.cls}" style="width:${pct(x.v)}%"></i>`).join('') +
+    `<i style="flex:1"></i><i class="r" style="width:${pct(reserve)}%" title="预留 ${fmtBytes(reserve)}"></i></div>` +
+    `<span class="${over ? 'hot' : ''}">${(used / GB).toFixed(1)} / ${(total / GB).toFixed(1)} GB</span>`;
+}
+
+function renderRec() {
+  const { gid, d, body } = rc.last;
+  const r = d.result, a = d.arch, m = d.model;
+  const g = state.groups.find(x => x.id === gid);
+  const GB = 2 ** 30;
+  const cls = ['w', 'k', 'c', 'm'];
+  const side = key => r.mem.map((x, i) => ({ label: x.label, v: body.unified ? x.gpu + x.cpu : x[key], cls: cls[i] }));
+  let bars = '';
+  if (body.unified) {
+    bars = memBar('内存', body.ramGB * GB, side('cpu'), r.ramReserve);
+  } else {
+    if (r.plan !== 'cpu') bars += memBar('显存', body.vramGB * GB, side('gpu'), r.vramReserve);
+    bars += memBar('内存', body.ramGB * GB, side('cpu'), r.ramReserve);
+  }
+  const legend = r.mem.map((x, i) => `<span style="--c:var(--rc-${cls[i]})">${esc(x.label)}</span>`).join('') +
+    '<span style="--c:var(--line)">预留给系统/驱动</span>';
+  const facts = [a.arch && '架构 ' + a.arch, a.layers + ' 层', a.ctxTrain && '训练上下文 ' + a.ctxTrain,
+    a.experts ? `MoE ${a.experts} 选 ${a.expertsUsed}` : '稠密模型', '权重 ' + fmtBytes(a.total)].filter(Boolean);
+  const flags = x => x.flag ? `<code>${esc(x.flag)}</code>` : '';
+  $('#rcRes').innerHTML = `
+    <div class="rec-sum"><span class="rec-plan ${r.plan}">${PLAN_TEXT[r.plan]}</span>
+      <div style="flex:1"><div>${esc(r.summary)}</div><div class="speed">速度预期：${esc(r.speed)}</div></div>
+      ${r.tps ? `<div class="rec-tps" title="按内存带宽估算的生成速度${r.tpsUpper ? '（只算了 CPU 部分，是上限）' : ''}">${r.tpsUpper ? '≤ ' : '≈ '}<b>${r.tps >= 10 ? Math.round(r.tps) : r.tps.toFixed(1)}</b> token/s</div>` : ''}</div>
+    <div class="rec-model">${esc(m.file)} · ${facts.map(esc).join(' · ')}</div>
+    <div class="rec-mem">${bars}</div>
+    <div class="rec-legend">${legend}</div>
+    ${r.warnings?.length || d.warn ? `<div class="rec-warn">${[...(r.warnings || []), d.warn].filter(Boolean).map(w => `<div>⚠ ${esc(w)}</div>`).join('')}</div>` : ''}
+    <div><div class="cmd-box"><pre class="cmd" id="rcCmd">${esc(d.command)}</pre><button type="button" data-rccopy>复制</button></div>
+      ${state.os === 'windows' ? '<div class="muted small">命令为 PowerShell 格式；在 cmd 中使用时去掉开头的「& 」。</div>' : ''}</div>
+    <div class="rcfg-ops" style="margin-top:0">
+      <button type="button" class="primary" data-rcapply>应用到「${esc(g?.name || m.name)}」的模型参数</button>
+      <span class="muted small">只写入上面这些推荐项（运行方式、GPU 层数、上下文、KV 缓存等），其它模型参数保持不变</span>
+    </div>
+    <div class="sec-title" style="margin:4px 0 0">为什么这样设置</div>
+    <div class="rec-why">${r.reasons.map(x => `<div><b>${esc(x.title)}${flags(x)}</b>${tipHTML(x.text)}</div>`).join('')}</div>`;
+}
+$('#rcRes').onclick = async e => {
+  if (e.target.matches('[data-rccopy]')) return copyText($('#rcCmd').textContent);
+  if (!e.target.matches('[data-rcapply]') || !rc.last) return;
+  const { gid, d } = rc.last;
+  e.target.disabled = true;
+  try {
+    const cur = (await api(`/api/groups/${gid}/params`)).params || {};
+    // 先清掉与推荐相关的旧设置，避免残留（如之前设置的 -ncmoe）
+    for (const k of ['mode', 'nGpuLayers', 'ctxSize', 'flashAttn', 'cacheTypeK', 'cacheTypeV', 'cpuMoe', 'nCpuMoe', 'parallel', 'kvOffload']) delete cur[k];
+    await api(`/api/groups/${gid}/params`, { method: 'PUT', body: { ...cur, ...d.result.params } });
+    toast('已写入该模型的参数，下次启动生效');
+    loadModels();
+  } catch (err) { toast(err.message, true); }
+  finally { e.target.disabled = false; }
+};
+// openRec 从模型列表跳转到推荐配置并预选模型。
+function openRec(g, variant) {
+  switchTab('settings');
+  recGroups(g.id, variant);
+  $('#rcfg').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if ($('#rcRam').value) recRun();
+}
+
 // ---------- llama.cpp 更新 ----------
 // 打开页面检测一次（服务端缓存 30 分钟），设置页可手动检测；更新在服务端后台执行，前端轮询进度。
 const upd = { check: null, timer: null, pick: {} };
 function buildText(t) { return t.build ? 'b' + t.build : (t.version || '版本未知'); }
 function updatable(c) { return (c?.targets || []).filter(t => t.hasUpdate && t.canUpdate && (t.asset || upd.pick[t.key])); }
 
+// 测试 GitHub 连接（使用表单中尚未保存的代理与镜像）
+$('#btnNetTest').onclick = async () => {
+  const f = $('#settingsForm'), box = $('#netTestRes'), btn = $('#btnNetTest');
+  btn.disabled = true;
+  box.innerHTML = '<span class="muted">正在测试…（最长约 40 秒）</span>';
+  const proxy = f.githubProxy.value.trim() || f.proxy.value.trim();
+  try {
+    const r = await api('/api/update/test', { method: 'POST', body: { proxy, mirror: f.githubMirror.value.trim() } });
+    const item = (name, p) => `<div>${p.ok ? '<span class="ok-text">✔</span>' : '<span class="hot">✘</span>'} ${name}：${esc(p.detail || '')}${p.ms ? `（${p.ms} ms）` : ''}</div>`;
+    const via = r.proxy ? `通过${esc(r.proxySource)} <code>${esc(r.proxy)}</code>` : '直连（未检测到任何代理）';
+    let tip = '';
+    if (!r.api.ok || !r.download.ok) {
+      tip = r.mirror?.ok && r.api.ok ? '下载可以使用镜像，保存后即可更新。'
+        : r.proxy ? '代理可能未运行或地址/端口不对：确认代理软件已启动，端口与软件中的“HTTP 端口 / 混合端口”一致。'
+          : '无法直接访问 GitHub：请填写代理地址（代理软件中的 HTTP 或混合端口，如 http://127.0.0.1:7890），或打开代理软件的“系统代理”。';
+    }
+    box.innerHTML = `<div class="muted">${via}</div>` + item('GitHub API（检测更新）', r.api) + item('GitHub 下载', r.download) +
+      (r.mirror ? item('镜像下载', r.mirror) : '') + (tip ? `<div class="hot">${esc(tip)}</div>` : '');
+  } catch (e) { box.innerHTML = `<span class="hot">${esc(e.message)}</span>`; }
+  finally { btn.disabled = false; }
+};
+
 async function checkUpdate(refresh) {
   $('#updInfo').textContent = '正在检测…';
   try {
     upd.check = await api('/api/update' + (refresh ? '?refresh=1' : ''));
-  } catch (e) { $('#updInfo').textContent = e.message; return null; }
+  } catch (e) { $('#updInfo').innerHTML = `<span class="hot">${esc(e.message)}</span> · 可在上方设置 GitHub 代理或镜像，并点“测试连接”`; return null; }
   renderUpdate();
   if (upd.check.task?.running) pollUpdate();
   return upd.check;
@@ -961,7 +1295,7 @@ function renderUpdate() {
   const c = upd.check;
   if (!c) return;
   const rel = c.release;
-  $('#updInfo').innerHTML = c.error ? `<span class="hot">${esc(c.error)}</span>` :
+  $('#updInfo').innerHTML = c.error ? `<span class="hot">${esc(c.error)}</span> · 可在上方设置 GitHub 代理或镜像，并点“测试连接”` :
     `最新发布：<a href="${esc(rel.url)}" target="_blank" rel="noopener">${esc(rel.tag)}</a>（${new Date(rel.published).toLocaleString()}）· 检测于 ${new Date(c.checkedAt).toLocaleTimeString()}`;
   $('#updTargets').innerHTML = (c.targets || []).map(t => {
     const st = !t.path ? `<span class="muted">${esc(t.reason || '未找到程序')}</span>`
@@ -1079,6 +1413,12 @@ async function autoCheckUpdate() {
 }
 
 // ---------- 引导 ----------
+// mirrorHref 按设置中的 GitHub 下载镜像改写下载链接（与服务端 mirrorURL 规则一致），未设置返回空。
+function mirrorHref(url) {
+  const m = (state.config?.githubMirror || '').trim();
+  if (!m) return '';
+  return m.includes('{url}') ? m.split('{url}').join(url) : m.replace(/\/+$/, '') + '/' + url;
+}
 const OS_NAME = { windows: 'Windows', linux: 'Linux', darwin: 'macOS', android: 'Android' };
 async function saveConfigPatch(patch) {
   await api('/api/config', { method: 'PUT', body: { ...state.config, ...patch } });
@@ -1095,7 +1435,8 @@ async function loadGuide(refresh) {
   const cpuRecs = gi.recs.filter(r => r.kind === 'cpu');
   const recHTML = r => `<div class="rec${r.alt ? ' alt' : ''}"><strong>${esc(r.title)}</strong>${r.alt ? ' <span class="tag">备选</span>' : ' <span class="tag running">推荐</span>'}
     ${r.note ? `<div class="muted small">${esc(r.note)}</div>` : ''}
-    <div class="dl">${r.assets.map((a, i) => `<a class="btn${i ? ' sec' : ''}" href="${esc(a.url)}" target="_blank" rel="noopener">⬇ ${esc(a.name)} <span style="opacity:.75">${fmtBytes(a.size)}</span></a>`).join('')}</div></div>`;
+    <div class="dl">${r.assets.map((a, i) => `<a class="btn${i ? ' sec' : ''}" href="${esc(a.url)}" target="_blank" rel="noopener">⬇ ${esc(a.name)} <span style="opacity:.75">${fmtBytes(a.size)}</span></a>` +
+      (mirrorHref(a.url) ? `<a class="btn sec" href="${esc(mirrorHref(a.url))}" target="_blank" rel="noopener" title="通过设置中的 GitHub 下载镜像">镜像下载</a>` : '')).join('')}</div></div>`;
   const sv = gi.servers;
   const svLine = (label, si, conf) => !conf && !si?.path ? `<div>${label}：<span class="muted">未配置</span></div>` :
     si?.path ? `<div>${label}：<span class="ok-text">✔</span> ${esc(si.path)} <span class="muted">（${esc(si.version || '版本未知')}${si.devices?.length ? '，' + si.devices.map(esc).join('；') : '，仅 CPU'}）</span></div>`
@@ -1180,6 +1521,7 @@ document.querySelector('.tabs [data-tab=system]').addEventListener('click', () =
   await loadInstances();
   await loadModels();
   autoCheckUpdate();
+  recFillHw(true);
   refreshStats();
   setInterval(refreshStats, 2000);
   setInterval(loadInstances, 3000);

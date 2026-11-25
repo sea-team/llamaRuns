@@ -555,8 +555,38 @@ func (a *App) confPath(key string) string {
 	return cfg.ServerPathGPU
 }
 
-// download 下载发布包到 dst（已存在且校验通过时跳过），校验 sha256。
+// mirrorURL 把 GitHub 下载地址改写为镜像地址：镜像含 {url} 时替换，否则作为前缀拼接。
+func mirrorURL(mirror, src string) string {
+	mirror = strings.TrimSpace(mirror)
+	if mirror == "" {
+		return src
+	}
+	if strings.Contains(mirror, "{url}") {
+		return strings.ReplaceAll(mirror, "{url}", src)
+	}
+	return strings.TrimRight(mirror, "/") + "/" + src
+}
+
+// download 下载发布包到 dst：配置了 GitHub 镜像且发布包带 sha256 时先走镜像，失败再直连 GitHub。
+// 没有 sha256 时不使用镜像，避免第三方镜像篡改的文件无法被发现。
 func (a *App) download(ctx context.Context, as ReleaseAsset, dst string) error {
+	mirror := strings.TrimSpace(a.cfg.Get().GitHubMirror)
+	if mirror != "" && as.Digest != "" {
+		src := mirrorURL(mirror, as.URL)
+		a.upd.logf("通过镜像下载：%s", src)
+		err := a.downloadFrom(ctx, as, dst, src)
+		if err == nil || ctx.Err() != nil {
+			return err
+		}
+		a.upd.logf("镜像下载失败（%v），改为从 GitHub 直接下载", err)
+	} else if mirror != "" {
+		a.upd.logf("%s 没有 sha256 校验值，为安全起见不使用镜像，直接从 GitHub 下载", as.Name)
+	}
+	return a.downloadFrom(ctx, as, dst, as.URL)
+}
+
+// downloadFrom 从 src 下载发布包到 dst（已存在且校验通过时跳过），校验 sha256。
+func (a *App) downloadFrom(ctx context.Context, as ReleaseAsset, dst, src string) error {
 	u := a.upd
 	want := strings.TrimPrefix(as.Digest, "sha256:")
 	if st, err := os.Stat(dst); err == nil && st.Size() == as.Size {
@@ -573,7 +603,7 @@ func (a *App) download(ctx context.Context, as ReleaseAsset, dst string) error {
 	// 长时间无数据时中断下载
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, "GET", as.URL, nil)
+	req, _ := http.NewRequestWithContext(ctx, "GET", src, nil)
 	resp, err := c.Do(req)
 	if err != nil {
 		return err

@@ -144,6 +144,7 @@ func (f *InfoFetcher) clientWith(proxy string, timeout time.Duration) (*http.Cli
 	}
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.ResponseHeaderTimeout = 30 * time.Second
+	tr.Proxy = autoProxy // 未配置代理时跟随环境变量与系统代理
 	if proxy != "" {
 		u, err := url.Parse(proxy)
 		if err != nil || u.Host == "" {

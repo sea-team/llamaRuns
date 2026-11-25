@@ -35,11 +35,17 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o d
 | `terminal_windows.go` / `terminal_other.go` | `OpenTerminal`：Windows 优先 `wt.exe new-tab`，否则 `CREATE_NEW_CONSOLE` 的 PowerShell；macOS osascript 调用 Terminal；Linux 依次尝试常见终端；WSL 借助 wt.exe；Android 不支持 |
 | `sysinfo.go` | `SysMonitor` 后台约每 2 秒采样：CPU/内存/交换/温度、GPU（nvidia-smi → rocm-smi → amdgpu sysfs）、实例进程 RSS/CPU；保留 90 个历史点；`hostInfo` 静态主机信息；`nvidiaCUDA` 解析驱动支持的 CUDA 版本 |
 | `modelinfo.go` | 模型介绍：按关键字在 HF / ModelScope 搜索（优先 GGUF 过滤），评分选仓库，拉 README；推荐参数提取（README 正则 → base_model README → generation_config.json）；HTTP 客户端按站点选代理（`proxyFor`：GitHub 用 `githubProxy`→`proxy`，HF 用 `proxy`，其它仅 `proxyAll` 时用）；结果缓存在 `cache/info/<组ID>_<源>.json` |
-| `update.go` | llama.cpp 更新：`parseBuild` 解析构建号（新版 `--version` 为 `1.0.0-dev (build N, …)`，旧版 `N (commit)`）；`detectBackend` 按目录文件识别包类型，`pickUpdateAsset` 选更新包（安装记录 `Config.Installed` 优先，CUDA 保持主版本），`cudaDeps` 缺运行库时附带 cudart；`Updater` 后台任务：下载（GitHub 代理、sha256 校验、60 秒无数据中断）→ 解压到 `<程序目录>/.llamaRuns-new` → `StopByDir` 停止实例 → 重命名替换（原文件移到 `.llamaRuns-old`）→ `ProbeServer` 验证，失败 `rollback` → `Relaunch` 原端口重启 |
+| `update.go` | llama.cpp 更新：`parseBuild` 解析构建号（新版 `--version` 为 `1.0.0-dev (build N, …)`，旧版 `N (commit)`）；`detectBackend` 按目录文件识别包类型，`pickUpdateAsset` 选更新包（安装记录 `Config.Installed` 优先，CUDA 保持主版本），`cudaDeps` 缺运行库时附带 cudart；`Updater` 后台任务：下载（GitHub 代理；配置 `githubMirror` 且有 sha256 时先走镜像，失败/校验不过改直连，无 sha256 不用镜像；sha256 校验、60 秒无数据中断）→ 解压到 `<程序目录>/.llamaRuns-new` → `StopByDir` 停止实例 → 重命名替换（原文件移到 `.llamaRuns-old`）→ `ProbeServer` 验证，失败 `rollback` → `Relaunch` 原端口重启 |
 | `guide.go` | 引导：`detectGPUs` 识别显卡厂商；拉取 GitHub 最新含二进制包的 release（缓存 30 分钟，走 GitHub 代理设置）；`recommendAssets` 按系统/架构/厂商/CUDA 版本推荐下载包 |
+| `gguf.go` | 纯 Go 读取 GGUF 文件头（元数据 + 张量信息，跳过词表等数组），张量大小按相邻偏移之差计算（无需量化类型表）；`LoadModelArch` 合并分片，得出层数、训练上下文、每 token KV 字节（支持逐层 head_count_kv、MLA）、每层/专家/词嵌入/输出层字节 |
+| `recommend.go` | 推荐配置：`RecommendHW` 按预算（显存扣 max(768MiB,6%)，内存扣 max(2GiB,15%)）依次尝试 全部 GPU → MoE `-ncmoe N`/`-cmoe` → 部分层 `-ngl N` → 纯 CPU，上下文在 32K 起的阶梯中取最大可放下（f16 与 q8_0 取更长者），输出参数、占用明细、原因与风险提示；按内存带宽估算生成速度（每 token 读取 CPU 上的权重，MoE 专家按激活比例，CPU 有效带宽 65%、统一内存 GPU 75%；独立显卡部分不估算，CPU+GPU 混合时结果为上限），低于 3 token/s 时提示；`handleRecommend` 复用 `plan` 选程序并生成命令 |
+| `memspec.go` | 本机内存规格检测（`sync.OnceValue` 缓存）：Windows `Win32_PhysicalMemory`（SMBIOS 类型码 24/26/34…、配置频率取最低）、Linux `dmidecode -t 17`（需 root，取不到留空）、macOS 按芯片型号查 `appleBW` 带宽表；通道数按内存条数推测；`fixMTs` 纠正部分机器（常见 DDR5）把时钟频率 MHz 当作 MT/s 报告的问题（低于该类型最低速率或标称≥2×配置时乘 2） |
+| `sysproxy.go` / `sysproxy_windows.go` / `sysproxy_other.go` | 系统代理：所有 HTTP 客户端未配置代理时用 `autoProxy`（环境变量优先，其次 Windows 注册表 Internet Settings `ProxyEnable/ProxyServer` 或 macOS `scutil --proxy`，缓存 30 秒）；`EffectiveProxy` 说明实际代理来源 |
+| `nettest.go` | `POST /api/update/test`：用界面上未保存的代理/镜像测试 GitHub API（含剩余请求次数）、发布包下载与镜像下载速度；`netErrText` 把常见网络错误转成中文说明 |
 | `server.go` | 路由与处理；`plan` 汇总一次启动所需的一切（版本、运行方式、视觉、程序路径、参数、上次选择）；目录浏览 `listDir`；日志 SSE |
 | `web/index.html` `web/app.js` `web/style.css` | 原生 JS 单页，`//go:embed web` 内嵌；Markdown 渲染按需从 jsdelivr 加载 marked + DOMPurify（加载失败退回纯文本） |
 | `update_test.go` | 构建号解析、更新包选择与 cudart 依赖、解压路径、解压/替换/回滚、代理选择 |
+| `recommend_test.go` | 合成 GGUF（含分片、逐层 KV）解析；各硬件场景的推荐方案 |
 | `main_test.go` | 量化识别、分组、推荐参数提取、参数切分、参数优先级、命令生成、下载包推荐、CUDA 版本选择 |
 
 ## 核心概念
@@ -52,7 +58,7 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o d
 
 ### 参数
 - 优先级：模型组参数 `Config.Models[groupKey]` → 全局参数 `Config.Global` → `defaultParams()`（mode=gpu、ngl=auto、ctx=4096、host=127.0.0.1、port=0 自动、fa=auto、jinja=true）。
-- **新增一个参数的步骤**：① `config.go` 的 `Params` 加字段（指针 + json 名）；② `process.go` 的 `argSpecs` 加映射（`argVal`/`argTrue`/`argFalse`，`gpu:true` 表示 CPU 方式跳过，`server:true` 表示 llama-cli 跳过）；③ `web/app.js` 的 `FIELDS` 加表单项（放到对应 `sec` 分区，写清 `hint` 作用说明）；④ 如需在 `main_test.go` 的 `TestBuildArgs` 中覆盖。
+- **新增一个参数的步骤**：① `config.go` 的 `Params` 加字段（指针 + json 名）；② `process.go` 的 `argSpecs` 加映射（`argVal`/`argTrue`/`argFalse`，`gpu:true` 表示 CPU 方式跳过，`server:true` 表示 llama-cli 跳过）；③ `web/app.js` 的 `FIELDS` 加表单项（放到对应 `sec` 分区；`label` 只写中文名，命令行写在 `flag`/`flagOff`，单位写 `unit`，`hint` 写“是什么、有什么影响”，`tip` 写“怎么填”（反引号内显示为代码），常用参数加 `common: true`）；④ 如需在 `main_test.go` 的 `TestBuildArgs` 中覆盖。
 - `BuildArgs` 通过 JSON（`UseNumber`，避免大整数变科学计数法）遍历 `argSpecs`；CPU 方式且用的是 GPU 版程序时追加 `-ngl 0 --device none`（仅当程序支持 `--device`）；视觉时追加 `--mmproj`；服务端追加 `-a/--host/--port`；最后追加参数中的附加参数与本次附加参数（`SplitArgs` 支持引号）。
 - `-ngl` 为 `FlexStr`（兼容旧配置中的数字）；`-fa` 选 `none` 表示不传递（兼容旧版 llama.cpp）。
 
@@ -91,6 +97,8 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o d
 | `POST /api/groups/{id}/command` | 生成 llama-server 与 llama-cli 命令（body：variant/mode/vision/mmproj/extra） |
 | `POST /api/groups/{id}/start` | 启动 |
 | `POST /api/groups/{id}/terminal` | 在新终端运行 llama-cli |
+| `GET /api/memspec` | 本机内存规格（type、speed MT/s、modules、channels、Apple 芯片 chip/bw） |
+| `POST /api/groups/{id}/recommend` | 推荐配置（body：variant、ramGB、vramGB、unified、ctx、users、vision、memBW GB/s、memName）→ result（plan/summary/params/reasons/warnings/mem）、arch、command |
 | `GET /api/groups/{id}/info?source=hf\|ms&repo=&refresh=1` | 模型介绍与推荐参数 |
 | `GET /api/instances`、`POST /api/instances/{id}/stop`、`DELETE /api/instances/{id}` | 实例列表 / 停止 / 移除 |
 | `GET /api/instances/{id}/logs` | 日志 SSE |
@@ -98,17 +106,18 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o d
 | `GET /api/guide?refresh=1` | 引导信息（系统、显卡、CUDA、release、推荐包、配置状态） |
 | `GET /api/update?refresh=1` | 更新检测：最新 release、每个程序（gpu/cpu）的当前构建号、是否可更新及原因、推荐包、可选包、当前任务 |
 | `POST /api/update` | 开始更新（body：`targets:["gpu","cpu"]`，`assets:{gpu:"包名"}` 可指定包） |
+| `POST /api/update/test` | 测试 GitHub 连接（body：proxy、mirror，未保存的值）→ 实际代理及来源、API / 下载 / 镜像结果 |
 | `GET /api/update/status`、`POST /api/update/cancel` | 更新任务进度（下载字节、步骤、日志）/ 取消 |
 
 ## 前端结构（web/app.js）
 
-按注释分节：工具函数与 `api()` → `FIELDS` 参数定义（`sec` 分区 + 字段 `hint` 说明）与 `renderFields/collectFields` → 通用对话框 `openDialog` → 目录/文件选择器 `pickPath`（面包屑、位置/最近使用、筛选、双击确定）→ 标签页 → 系统状态（曲线数据来自服务端历史，按实际时间铺满）→ 模型组列表（`<details>` 折叠，展开状态存于 `state.openGroups`）→ 启动/命令对话框 `runDialog` → 参数对话框 → 模型介绍 → 运行实例与日志 SSE → 设置 → llama.cpp 更新（`checkUpdate`/`startUpdate`/`pollUpdate`，顶部 `#updBar` 提示与进度）→ 引导 `loadGuide` → 初始化（末尾 `autoCheckUpdate`）（未找到程序或无模型目录时自动打开引导页）。
+按注释分节：工具函数与 `api()` → `FIELDS` 参数定义（`sec` 分区 + 字段 `hint` 说明）与 `renderFields/collectFields` → 通用对话框 `openDialog` → 目录/文件选择器 `pickPath`（面包屑、位置/最近使用、筛选、双击确定）→ 标签页 → 系统状态（曲线数据来自服务端历史，按实际时间铺满）→ 模型组列表（`<details>` 折叠，展开状态存于 `state.openGroups`）→ 启动/命令对话框 `runDialog` → 参数对话框 → 推荐配置（`recGroups`/`recFillHw`/`recRun`/`renderRec`，内存规格 `MEM_SPECS`（具体规格如 DDR4-3200，不单独填频率；检测到列表外速率时 `selectMemSpec` 追加“本机检测”项）/`APPLE_CHIPS` 与 `recMemCalc` 带宽 = MT/s × 8 × 通道，模型列表“推荐配置”按钮经 `openRec` 跳转）→ 模型介绍 → 运行实例与日志 SSE → 设置 → llama.cpp 更新（`checkUpdate`/`startUpdate`/`pollUpdate`，顶部 `#updBar` 提示与进度）→ 引导 `loadGuide` → 初始化（末尾 `autoCheckUpdate`）（未找到程序或无模型目录时自动打开引导页）。
 
 轮询：状态 2 秒、实例 3 秒；本地存储仅用于记住标签页、介绍来源、最近目录。
 
 ## 配置文件（config.json）
 
-`serverPathGpu`、`serverPathCpu`、`modelDirs[]`、`allowMulti`、`maxLogLines`（默认 1000）、`basePort`（默认 8080）、`hfEndpoint`、`proxy`（http/https/socks5）、`proxyAll`（false=仅 HF/GitHub 走代理）、`githubProxy`（GitHub 专用代理，空则用 `proxy`）、`autoUpdate`（检测到新版本自动更新）、`installed`（程序目录 → 更新安装的包名去构建号，`UpdateSettings` 时保留）、`global`（Params）、`models`（组 Key → Params）、`lastRun`（组 Key → LastRun）。
+`serverPathGpu`、`serverPathCpu`、`modelDirs[]`、`allowMulti`、`maxLogLines`（默认 1000）、`basePort`（默认 8080）、`hfEndpoint`、`proxy`（http/https/socks5）、`proxyAll`（false=仅 HF/GitHub 走代理）、`githubProxy`（GitHub 专用代理，空则用 `proxy`，再空则跟随系统代理）、`githubMirror`（GitHub 下载镜像，前缀或含 `{url}` 的模板）、`autoUpdate`（检测到新版本自动更新）、`installed`（程序目录 → 更新安装的包名去构建号，`UpdateSettings` 时保留）、`global`（Params）、`models`（组 Key → Params）、`lastRun`（组 Key → LastRun）。
 
 ## 约定
 
@@ -126,6 +135,8 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o d
 5. **归档与改名**：项目更名为 llamaRuns，新增本归档文档。
 6. **共享目录**：模型目录支持 SMB / NFS 等共享路径（Windows UNC 与网络驱动器；Linux/macOS 匹配已挂载位置）；扫描限时并在设置页 / 模型页提示不可用目录；选择器显示网络位置、可浏览服务器共享。
 7. **自动更新**：打开页面检测一次 / 手动检测 llama.cpp 新版本，一键或自动下载替换程序并重启运行中的实例；GitHub 访问可单独配置代理。
+8. **参数说明与推荐配置**：参数说明改为“作用 / 怎么填”两段并标出命令行参数、单位与常用标记，支持搜索与只看常用，已修改项高亮；全局设置新增推荐配置：填内存、显存、选模型，读取 GGUF 结构估算占用，生成最适合硬件的 llama-server 命令及原因说明，可写入模型参数。内存选择具体规格（如 DDR4-2400、DDR5-5600、LPDDR5X-8533、Apple 芯片）与通道，换算带宽用于估算生成速度与给出提升建议。
+9. **内存频率与更新代理**：修正 Windows 把 DDR5 时钟频率当传输率报告导致带宽减半；内存规格改为直接选具体规格（不再单独填频率，带宽由规格与通道得出）；GitHub 代理移到“llama.cpp 更新”中，新增下载镜像（仅用于带 sha256 的包，失败直连）与“测试连接”；代理留空时跟随系统代理（Clash / v2rayN 系统代理模式）；引导页在设置镜像时提供镜像下载链接。
 
 ## 已知限制
 
@@ -134,4 +145,5 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o d
 - 在终端运行 llama-cli 只在面板所在机器上生效；Android 不支持。
 - Linux/macOS 不会自动挂载共享（需要凭据与 root 权限），只匹配已挂载的；主机名与挂载时写法（IP / 域名）不同则匹配不到，需直接填挂载点。
 - 更新只替换/新增文件，不删除旧包独有的文件（如从 CUDA 版换成 CPU 版后 `ggml-cuda` 仍在目录中）；切换包类型建议用新目录。更新依赖 `api.github.com`（未认证每小时 60 次，检测结果缓存 30 分钟）。
+- 推荐配置是估算：速度只按内存/统一内存带宽估算，不知道独立显卡的显存带宽；Linux 普通用户读不到内存规格（dmidecode 需 root），需手动选择；滑动窗口（SWA）、循环/混合注意力层按全量 KV 计（偏保守）；计算缓冲按 `-ub 512` + Flash Attention 估算；多卡按显存总和计算，未生成 `-ts`。
 - Windows 生成的命令为 PowerShell 格式（`& "路径" ...`），cmd 中需去掉开头的 `& `。

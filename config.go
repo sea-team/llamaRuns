@@ -79,6 +79,7 @@ type Config struct {
 	Proxy           string             `json:"proxy"`                     // http://、https:// 或 socks5:// 代理
 	ProxyAll        bool               `json:"proxyAll"`                  // false：仅 HuggingFace 走代理
 	GitHubProxy     string             `json:"githubProxy"`               // 访问 GitHub 的代理，为空时使用 Proxy
+	GitHubMirror    string             `json:"githubMirror"`              // GitHub 下载镜像（前缀或含 {url} 的模板），仅用于带 sha256 的发布包
 	AutoUpdate      bool               `json:"autoUpdate"`                // 检测到 llama.cpp 新版本时自动更新
 	Installed       map[string]string  `json:"installed"`                 // 程序目录 -> 通过更新安装的发布包（去掉构建号）
 	LastRun         map[string]LastRun `json:"lastRun"`

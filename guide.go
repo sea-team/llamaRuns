@@ -127,7 +127,7 @@ func (a *App) latestRelease(refresh bool) (*Release, error) {
 	}
 	body, err := a.info.get(netGitHub, "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=5")
 	if err != nil {
-		return nil, fmt.Errorf("获取 GitHub 发布信息失败：%v（可在设置中配置代理）", err)
+		return nil, fmt.Errorf("获取 GitHub 发布信息失败：%v（可在「全局设置 → llama.cpp 更新」中配置 GitHub 代理，并用“测试连接”检查）", err)
 	}
 	var list []struct {
 		Tag       string    `json:"tag_name"`
